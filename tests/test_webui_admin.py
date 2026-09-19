@@ -22,8 +22,6 @@ from atri_webui.model_profiles import (
 )
 from atri_webui.page import render_index
 from atri_webui.sticker_admin import resolve_under, sticker_file_payload, sticker_summary
-from atri_webui import voice_admin
-from atri_webui.voice_admin import resolve_voice_audio, save_reference_audio, save_test_audio
 from atri_webui.upload_parser import (
     multipart_file,
     multipart_text,
@@ -895,90 +893,6 @@ def test_rendered_webui_inline_script_has_valid_javascript_syntax() -> None:
     assert result.returncode == 0, result.stderr
 
 
-def test_voice_page_has_separate_policy_profile_and_preview_controls() -> None:
-    html = render_index()
-
-    assert "onclick=\"showTab(event,'voice')\"" in html
-    assert 'id="voiceAsrEnabled"' in html
-    assert 'id="voiceTtsEnabled"' in html
-    assert '<select id="voiceProfileId"' in html
-    assert 'id="voiceReferenceFile"' in html
-    assert 'id="voicePreviewLanguage"' in html
-    assert 'id="voicePreviewAudio"' in html
-    assert "async function previewVoice()" in html
-    assert "language:$(\'voicePreviewLanguage\').value" in html
-    assert 'id="voiceAsrLexicon"' in html
-    assert "asr_lexicon_text:$('voiceAsrLexicon').value" in html
-    assert 'id="voiceTtsPronunciations"' in html
-    assert "tts_pronunciation_text:$('voiceTtsPronunciations').value" in html
-
-
-def test_advanced_reply_settings_include_voice_probability_control() -> None:
-    html = render_index()
-
-    assert 'id="replyVoiceProbabilityNumber"' in html
-    assert '["REPLY_VOICE_PROBABILITY","语音概率（%）","voice-probability"]' in html
-    assert 'if(type===\'voice-probability\') continue;' in html
-    assert "async function loadReplyVoiceProbability()" in html
-    assert "async function saveReplyVoiceProbability()" in html
-    assert "/api/voice/behavior" in html
-    assert "reply_voice_probability:probability" in html
-    assert "await saveReplyVoiceProbability();" in html
-
-
-def test_test_page_has_asr_and_tts_acceptance_controls() -> None:
-    html = render_index()
-
-    assert 'id="testAsrFile"' in html
-    assert 'id="testAsrLanguage"' in html
-    assert 'id="testAsrRecordButton"' in html
-    assert 'id="testAsrStopButton"' in html
-    assert 'id="testAsrOut"' in html
-    assert 'id="testTtsText"' in html
-    assert 'id="testTtsLanguage"' in html
-    assert 'id="testTtsProfileA"' in html
-    assert 'id="testTtsProfileB"' in html
-    assert 'id="testTtsAudioA"' in html
-    assert 'id="testTtsAudioB"' in html
-    assert "/api/voice/test-asr" in html
-    assert "async function startAsrRecording()" in html
-    assert "function stopAsrRecording()" in html
-    assert "async function testVoiceRecognition(fileOverride=null)" in html
-    assert "form.append('language'" in html
-    assert "async function testVoiceSynthesis()" in html
-    assert "async function testVoiceComparison()" in html
-
-
-def test_voice_reference_is_saved_inside_profile_directory(
-    tmp_path: Path, monkeypatch
-) -> None:
-    root = tmp_path / "voice"
-    monkeypatch.setattr(voice_admin, "VOICE_ROOT", root)
-    monkeypatch.setattr(voice_admin, "VOICE_PROFILE_DIR", root / "profiles")
-    voice_admin.voice_profile_store()
-
-    profile = save_reference_audio("atri", "sample.wav", b"RIFFvoice")
-    saved = Path(profile.reference_audio)
-
-    assert saved.read_bytes() == b"RIFFvoice"
-    assert saved.is_relative_to(root)
-    assert resolve_voice_audio(str(saved)) == saved.resolve()
-
-
-def test_voice_test_audio_is_saved_in_cache_with_safe_generated_name(
-    tmp_path: Path, monkeypatch
-) -> None:
-    cache = tmp_path / "cache"
-    monkeypatch.setattr(voice_admin, "VOICE_CACHE_DIR", cache)
-
-    saved = save_test_audio("../../user recording.wav", b"RIFFvoice")
-
-    assert saved.parent == cache.resolve()
-    assert saved.name.startswith("asr-test-")
-    assert saved.suffix == ".wav"
-    assert saved.read_bytes() == b"RIFFvoice"
-
-
 def test_webui_test_chat_reports_failure_without_fallback_reply(
     tmp_path: Path, monkeypatch
 ) -> None:
@@ -1060,37 +974,6 @@ def test_webui_test_chat_uses_the_same_relaxed_quality_mode_as_runtime(
     assert "联网结果第一条" in result["reply"]
 
 
-def test_voice_preview_enables_safe_best_effort_quality_fallback() -> None:
-    options = webui_server._voice_preview_synthesis_options(
-        {
-            "original_clip_enabled": True,
-            "quality_gate_enabled": True,
-            "quality_max_error_rate": 0.12,
-            "quality_retries": 1,
-        }
-    )
-
-    assert options["quality_gate"] is True
-    assert options["quality_max_error_rate"] == 0.12
-    assert options["allow_best_effort"] is True
-
-
-def test_voice_preview_fast_mode_skips_quality_round_trip() -> None:
-    options = webui_server._voice_preview_synthesis_options_for_mode(
-        {
-            "original_clip_enabled": True,
-            "quality_gate_enabled": True,
-            "quality_max_error_rate": 0.12,
-            "quality_retries": 2,
-        },
-        "fast",
-    )
-
-    assert options["quality_gate"] is False
-    assert options["quality_retries"] == 0
-    assert options["allow_best_effort"] is True
-
-
 def test_runtime_status_keeps_webui_contract(monkeypatch) -> None:
     snapshots: list[bool] = []
 
@@ -1125,7 +1008,6 @@ def test_runtime_status_keeps_webui_contract(monkeypatch) -> None:
     assert status["napcat"] is True
     assert status["ollama"] is False
     assert status["ollama_on_demand"] is False
-    assert status["voice"] is False
     assert status["onebot"] == "ws://127.0.0.1:8765/onebot"
     assert status["webui_url"] == "http://127.0.0.1:8787"
     assert status["maibot_webui"] == {

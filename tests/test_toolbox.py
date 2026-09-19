@@ -1542,7 +1542,6 @@ def test_normal_reply_repairs_material_claim_once(monkeypatch, tmp_path) -> None
     )
 
     assert len(calls) == 2
-    assert calls[1]["allow_reply_voice"] is False
     assert "只读到了标题" in reply
     assert not context.needs_grounding_repair(reply)
 

@@ -16,9 +16,6 @@ class EngineReplyMixin(PersonaEngineMixin):
     ) -> str:
         # 主流程遵循“清洗输入 -> 记录记忆 -> 确定性分支/安全兜底
         # -> 组织模型上下文 -> 校验输出”，便于定位每个阶段的责任。
-        self._pending_voice_requests.pop(conversation_id, None)
-        self._pending_reply_voice_choices.pop(conversation_id, None)
-        self._pending_call_requests.pop(conversation_id, None)
         self._pending_reply_failures.pop(conversation_id, None)
         clean_text = user_text.strip()
         if not clean_text:
@@ -92,34 +89,6 @@ class EngineReplyMixin(PersonaEngineMixin):
 
         if self.config.ai_enabled:
             try:
-                voice_policy = load_voice_behavior()
-                voice_profile = (
-                    context_profile
-                    if conversation_id.startswith("group:") and context_profile
-                    else profile
-                )
-                voice_choice = evaluate_reply_voice_choice(
-                    conversation_id,
-                    voice_profile,
-                    voice_policy,
-                    explicit_request=detect_explicit_delivery_intent(clean_text) is not None,
-                    replying_to_voice=bool(
-                        getattr(tool_context, "prefer_voice_reply", False)
-                    ),
-                    emotional_context=(
-                        _is_distress(clean_text)
-                        or any(word in clean_text for word in TIRED_KEYWORDS)
-                    ),
-                )
-                allow_reply_voice = (
-                    bool(getattr(self.config, "voice_tts_enabled", False))
-                    and (
-                        not conversation_id.startswith("group:")
-                        or bool(getattr(self.config, "voice_group_enabled", False))
-                    )
-                    and voice_choice.allowed
-                )
-                self._pending_reply_voice_choices[conversation_id] = allow_reply_voice
                 api_reply = await self._reply_with_guarded_api(
                     conversation_id,
                     clean_text,
@@ -131,7 +100,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                     iteration_decision=iteration_decision,
                     tool_context=tool_context,
                     reply_focus=reply_focus,
-                    allow_reply_voice=allow_reply_voice,
                 )
                 human_pipeline = bool(
                     getattr(self.config, "human_reply_pipeline_enabled", True)
@@ -149,7 +117,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                     and not _has_current_visual_context(tool_context)
                     and recent_messages
                     and _needs_history_grounding_review(api_reply)
-                    and conversation_id not in self._pending_voice_requests
                 ):
                     reviewed_reply = await self._review_history_grounding(
                         clean_text,
@@ -161,7 +128,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                 if (
                     human_pipeline
                     and _needs_hard_reality_repair(api_reply)
-                    and conversation_id not in self._pending_voice_requests
                 ):
                     reality_prompt = (
                         "上一条候选回复把没有经过工具确认的现实动作、环境或实时状态"
@@ -189,7 +155,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                         iteration_decision=iteration_decision,
                         tool_context=tool_context,
                         reply_focus=reply_focus,
-                        allow_reply_voice=False,
                     )
                     if reality_reply and not _needs_hard_reality_repair(reality_reply):
                         api_reply = reality_reply
@@ -204,7 +169,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                     human_pipeline
                     and callable(grounding_check)
                     and grounding_check(api_reply)
-                    and conversation_id not in self._pending_voice_requests
                 ):
                     grounding_prompt = (
                         "上一条候选回复超出了本轮工具实际读取到的材料范围。"
@@ -232,7 +196,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                         iteration_decision=iteration_decision,
                         tool_context=tool_context,
                         reply_focus=reply_focus,
-                        allow_reply_voice=False,
                     )
                     if grounded_reply and not grounding_check(grounded_reply):
                         api_reply = grounded_reply
@@ -267,7 +230,6 @@ class EngineReplyMixin(PersonaEngineMixin):
                             iteration_decision=iteration_decision,
                             tool_context=tool_context,
                             reply_focus=reply_focus,
-                            allow_reply_voice=allow_reply_voice,
                         )
                         if rewritten:
                             api_reply = rewritten

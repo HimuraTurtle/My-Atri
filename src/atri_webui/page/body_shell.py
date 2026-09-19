@@ -21,7 +21,7 @@ PART = r"""  <header>
     <section>
       <div class="tabs">
         <button class="tab active" onclick="showTab(event,'model')">模型</button>
-        <button class="tab" onclick="showTab(event,'voice')">语音</button>
+        <button class="tab" onclick="showTab(event,'voice')">歌曲</button>
         <button class="tab" onclick="showTab(event,'users')">用户中心</button>
         <button class="tab" onclick="showTab(event,'test')">测试</button>
         <button class="tab" onclick="showTab(event,'evaluation')">评测</button>

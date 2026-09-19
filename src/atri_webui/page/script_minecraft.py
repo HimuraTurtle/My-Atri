@@ -1,26 +1,6 @@
 from __future__ import annotations
 
-PART = r"""  const speech = module !== 'music';
-  $('voiceSpeechTab').classList.toggle('active', speech);
-  $('voiceMusicTab').classList.toggle('active', !speech);
-  $('voiceSpeechPanel').classList.toggle('active', speech);
-  $('voiceMusicPanel').classList.toggle('active', !speech);
-  $('voiceSpeechTab').setAttribute('aria-selected', String(speech));
-  $('voiceMusicTab').setAttribute('aria-selected', String(!speech));
-  window._voiceMusicActive = !speech;
-  if(speech) {
-    clearTimeout(window._musicProjectTimer);
-    releaseMusicMedia();
-  } else if(!window._musicProjectsLoaded) {
-    loadMusicSources();
-    loadMusicProjects();
-    loadDeliverySongs();
-  } else {
-    loadDeliverySongs();
-  }
-}
-
-function minecraftMaidTelemetry() {
+PART = r"""function minecraftMaidTelemetry() {
   const state = window._minecraftData?.bridge?.state || {};
   const telemetry = state.telemetry || {};
   return Array.isArray(telemetry.maids) ? telemetry.maids : [];
@@ -132,6 +112,4 @@ async function sendMinecraftCommand(command) {
     out.textContent = '发送失败：' + error.message;
   }
 }
-
-function voiceConfigValue(cfg, key) {
 """

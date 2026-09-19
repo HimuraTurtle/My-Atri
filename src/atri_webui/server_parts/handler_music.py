@@ -4,13 +4,6 @@ from .handler_support import WebUIHandlerMixin, _sync_webui_globals
 
 
 class HandlerMusicMixin(WebUIHandlerMixin):
-    def _handle_singing_jobs(self) -> None:
-        try:
-            payload = _music_bridge_request("/api/jobs")
-        except Exception as exc:
-            return self._send_error(HTTPStatus.BAD_GATEWAY, str(exc))
-        self._send_json(payload)
-
     def _handle_music_projects(self) -> None:
         try:
             payload = _music_bridge_request("/api/projects")
@@ -161,6 +154,32 @@ class HandlerMusicMixin(WebUIHandlerMixin):
             if len(file_item.data) > MAX_COMPLETE_MUSIC_UPLOAD_BYTES:
                 raise ValueError("完整音乐最大 180MB")
             path = save_complete_song(str(file_item.filename), file_item.data)
+        except Exception as exc:
+            return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+        self._send_json({"ok": True, "path": str(path), "name": path.name})
+
+    def _handle_music_source_upload(self) -> None:
+        """上传原曲到固定素材库，供歌曲工程选择。"""
+        content_length = int(self.headers.get("Content-Length") or 0)
+        if content_length <= 0 or content_length > MAX_MUSIC_SOURCE_UPLOAD_BYTES + 200_000:
+            return self._send_error(HTTPStatus.BAD_REQUEST, "原曲音频最大 100MB")
+        try:
+            form = parse_multipart_form(
+                self.headers.get("Content-Type", ""),
+                self.rfile.read(content_length),
+            )
+            file_item = multipart_file(form, "file")
+            if file_item is None or not file_item.filename:
+                raise ValueError("请选择原曲或导唱音频")
+            if len(file_item.data) > MAX_MUSIC_SOURCE_UPLOAD_BYTES:
+                raise ValueError("原曲音频最大 100MB")
+            filename = safe_filename(str(file_item.filename))
+            if Path(filename).suffix.lower() not in AUDIO_EXTENSIONS:
+                raise ValueError("原曲仅支持 wav/flac/mp3/ogg/m4a/aac")
+            MUSIC_SOURCE_ROOT.mkdir(parents=True, exist_ok=True)
+            target = unique_path(MUSIC_SOURCE_ROOT / filename)
+            target.write_bytes(file_item.data)
+            path = target.resolve()
         except Exception as exc:
             return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
         self._send_json({"ok": True, "path": str(path), "name": path.name})

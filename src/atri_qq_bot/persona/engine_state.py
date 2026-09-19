@@ -18,9 +18,6 @@ class EngineStateMixin(PersonaEngineMixin):
         )
         self._serious_until: defaultdict[str, float] = defaultdict(float)
         self._last_abstract_reply_at: defaultdict[str, float] = defaultdict(float)
-        self._pending_voice_requests: dict[str, VoiceRequest] = {}
-        self._pending_reply_voice_choices: dict[str, bool] = {}
-        self._pending_call_requests: dict[str, CallInviteRequest] = {}
         # suwayomi_send_chapter 工具受理的章节投递请求；OneBot 层在文字
         # 回复发出后消费并真正下载、打包、上传。
         self._pending_manga_deliveries: dict[str, MangaDeliveryRequest] = {}
@@ -34,15 +31,6 @@ class EngineStateMixin(PersonaEngineMixin):
             except Exception:
                 # 认知扩展故障不得阻断原有聊天服务；运行状态页会显示具体错误。
                 self._cognition_store = None
-
-    def consume_voice_request(self, conversation_id: str) -> VoiceRequest | None:
-        return self._pending_voice_requests.pop(conversation_id, None)
-
-    def consume_reply_voice_choice(self, conversation_id: str) -> bool:
-        return self._pending_reply_voice_choices.pop(conversation_id, False)
-
-    def consume_call_request(self, conversation_id: str) -> CallInviteRequest | None:
-        return self._pending_call_requests.pop(conversation_id, None)
 
     def consume_manga_delivery(self, conversation_id: str) -> MangaDeliveryRequest | None:
         return self._pending_manga_deliveries.pop(conversation_id, None)

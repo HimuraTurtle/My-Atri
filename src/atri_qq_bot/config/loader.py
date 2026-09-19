@@ -296,25 +296,6 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         search_provider=_env("SEARCH_PROVIDER", "auto").strip().casefold() or "auto",
         bocha_api_key=_optional_env("BOCHA_API_KEY"),
         web_grounding_review_enabled=_env_bool("WEB_GROUNDING_REVIEW_ENABLED", True),
-        voice_asr_enabled=_env_bool("VOICE_ASR_ENABLED", False),
-        voice_tts_enabled=_env_bool("VOICE_TTS_ENABLED", False),
-        voice_service_url=_env("VOICE_SERVICE_URL", "http://127.0.0.1:8790").rstrip("/"),
-        voice_service_timeout_seconds=max(
-            2.0, _env_float("VOICE_SERVICE_TIMEOUT_SECONDS", 180.0)
-        ),
-        voice_profile=_env("VOICE_PROFILE", "atri"),
-        voice_zh_profile=_env("VOICE_ZH_PROFILE", ""),
-        voice_group_enabled=_env_bool("VOICE_GROUP_ENABLED", False),
-        voice_reply_to_voice=_env_bool("VOICE_REPLY_TO_VOICE", False),
-        voice_max_chars=max(20, min(500, _env_int("VOICE_MAX_CHARS", 160))),
-        voice_segment_max_chars=max(
-            16,
-            min(120, _env_int("VOICE_SEGMENT_MAX_CHARS", 100)),
-        ),
-        voice_cooldown_seconds=max(0, _env_int("VOICE_COOLDOWN_SECONDS", 30)),
-        voice_input_max_bytes=max(
-            1_000_000, _env_int("VOICE_INPUT_MAX_BYTES", 20_000_000)
-        ),
         online_music_enabled=_env_bool("ONLINE_MUSIC_ENABLED", True),
         meme_learning_enabled=_env_bool("MEME_LEARNING_ENABLED", True),
         meme_learning_interval_hours=max(

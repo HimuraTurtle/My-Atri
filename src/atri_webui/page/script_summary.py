@@ -109,5 +109,4 @@ function openSummaryImage(encodedId) {
   const id = decodeURIComponent(encodedId || '');
   window.open('/api/group-summaries/export?id=' + encodeURIComponent(id) + '&format=image', '_blank', 'noopener');
 }
-function showVoiceModule(module) {
 """

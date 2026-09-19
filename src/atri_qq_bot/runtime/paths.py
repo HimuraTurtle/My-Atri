@@ -19,11 +19,6 @@ PROACTIVE_POLICY_PATH = WEBUI_DIR / "proactive_policy.json"
 # 视觉/语音用户权限由 WebUI 写入，OneBot 进程按需读取；独立文件避免污染 .env。
 MODALITY_ACCESS_PATH = WEBUI_DIR / "modality_access.json"
 
-VOICE_ROOT = DATA_DIR / "voice"
-VOICE_PROFILE_DIR = VOICE_ROOT / "profiles"
-VOICE_CACHE_DIR = VOICE_ROOT / "cache"
-VOICE_BEHAVIOR_PATH = WEBUI_DIR / "voice_behavior.json"
-
 # QQ 唱歌只读取 COMPLETE_MUSIC_ROOT，按文件名匹配并作为 QQ 语音发送整首。
 # DELIVERY_MUSIC_ROOT 是 WebUI 的旧版分段管理/试听库，不参与 QQ 发送。
 MUSIC_ROOT = DATA_DIR / "music"

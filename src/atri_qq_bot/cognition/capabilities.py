@@ -103,17 +103,6 @@ def _default_contracts() -> list[CapabilityContract]:
             and meaning.relation_to_previous in {"continue", "modify", "correct"},
         ),
         CapabilityContract(
-            name="voice.speak",
-            description="使用语音合成发送真实 QQ 语音",
-            read_only=False,
-            has_side_effect=True,
-            required_fields=(),
-            success_condition="语音合成成功且 QQ 发送返回成功回执",
-            can_handle=lambda meaning, state: _goal_contains(
-                meaning, "发语音", "语音说", "用日语说", "读出来", "念给我"
-            ) or meaning.action_domain == "voice.speak",
-        ),
-        CapabilityContract(
             name="vision.understand",
             description="结合本轮 OCR 与视觉证据理解图片、表情包或视频画面",
             read_only=True,

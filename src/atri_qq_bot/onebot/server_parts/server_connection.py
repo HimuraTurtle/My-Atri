@@ -33,8 +33,6 @@ class OneBotConnectionMixin(OneBotServerMixin):
             config.sticker_capture_dir,
         )
         self.tools = ToolAnalyzer(config)
-        self.voice = VoiceManager(config)
-        self.voice_calls = VoiceCallStore()
         self._active_websockets: set[Any] = set()
         self._pending_actions: dict[str, asyncio.Future[dict[str, Any]]] = {}
         self._onebot_probe_failures = 0

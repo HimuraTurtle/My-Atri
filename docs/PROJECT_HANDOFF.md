@@ -1,27 +1,25 @@
 # AI_ATRI 项目交接说明
 
-更新时间：2026-07-31
+更新时间：2026-09-19（语音模块已移除，保留点歌交付与歌声工程）
 
 这份文档是后续开发的工程基线。新增功能、接入模型、调整回复链路前，先读本文件和对应模块代码；不要只根据表面现象添加关键词、模板或兜底分支。
 
 ## 1. 项目定位
 
-AI_ATRI 是基于 NapCat/OneBot v11 的 QQ AI 陪伴机器人，核心目标是让亚托莉在私聊和群聊中自然回复，同时支持记忆、工具调用、图片理解、表情、语音、主动互动、桌宠和 WebUI 管理。
+AI_ATRI 是基于 NapCat/OneBot v11 的 QQ AI 陪伴机器人，核心目标是让亚托莉在私聊和群聊中自然回复，同时支持记忆、工具调用、图片理解、表情、点歌、主动互动、桌宠和 WebUI 管理。
 
 主要运行服务：
 
 | 服务 | 默认地址 | 作用 |
 | --- | --- | --- |
-| ATRI 主服务 | `ws://127.0.0.1:8765/onebot` | 接收 NapCat 消息、回复、记忆、工具、主动互动、语音决策 |
-| WebUI | `http://127.0.0.1:8787` | 配置、模型档案、记忆、表情、语音和主动互动管理 |
-| 语音服务 | `http://127.0.0.1:8790` | ASR、TTS、原声素材匹配、歌唱任务 |
+| ATRI 主服务 | `ws://127.0.0.1:8765/onebot` | 接收 NapCat 消息、回复、记忆、工具、主动互动 |
+| WebUI | `http://127.0.0.1:8787` | 配置、模型档案、记忆、表情、音乐和主动互动管理 |
+| AI_music 桥接 | `http://127.0.0.1:8793` | 歌曲工程：导唱处理、Seed-VC 歌声转换、伴奏混音 |
 | Ollama | `http://127.0.0.1:11434` | 本地聊天/视觉模型 |
-| GPT-SoVITS 兼容接口 | 通常为 `http://127.0.0.1:9880/tts` | 角色语音合成引擎 |
 
 入口：
 
 - 主机器人：`src/atri_qq_bot/__main__.py`
-- 语音服务：`src/atri_voice_service/__main__.py`
 - 桌宠：`src/atri_desktop/__main__.py`
 - Windows 启动脚本：`tools/launch/atri/`、`tools/launch/qq_legacy/`
 
@@ -35,8 +33,8 @@ NapCat QQ
   -> 当前消息材料解析
   -> ToolAnalyzer：时间、网页、天气、文档、图片、视频
   -> AtriReplyEngine：人设、记忆、工具循环、语言守卫、质量校验
-  -> 消息规划：拆分文本、表情、语音
-  -> VoiceManager / StickerManager
+  -> 消息规划：拆分文本、表情
+  -> StickerManager
   -> OneBot send_*_msg
   -> 记录回复、记忆和可观测日志
 ```
@@ -46,8 +44,8 @@ NapCat QQ
 - `onebot/server.py` 负责消息生命周期和外部 QQ 交互，不负责编写人设提示词。
 - `toolbox.py` 负责“当前消息附带材料”的读取和分析，不负责决定最终人设回复。
 - `persona/core.py` 负责把当前问题、记忆、工具结果组合成最终文本，不应伪造工具结果。
-- `message_plan/` 负责把文本、表情、语音转换为可发送消息，不应重新生成内容。
-- `voice/` 负责语音决策、合成、质量门和发送，不应改变正常文本回复语义。
+- `message_plan/` 负责把文本、表情转换为可发送消息，不应重新生成内容。
+- `music/` 负责点歌识别、本地/在线歌库检索和 QQ 语音整曲交付，不应改变正常文本回复语义。
 - WebUI 只修改配置和数据文件；运行中的服务通过 `WebUIState.reload_config()` 更新可热加载配置。
 
 ## 3. 关键模块地图
@@ -56,10 +54,9 @@ NapCat QQ
 
 - `src/atri_qq_bot/config/schema.py`：`BotConfig` 全部配置字段和默认值。
 - `src/atri_qq_bot/config/loader.py`：从 `.env` 读取并校验配置；新增配置必须同时进入 schema、loader 和必要的 WebUI 映射。
-- `src/atri_qq_bot/runtime/paths.py`：项目根目录、数据目录、模型档案、主动策略、语音目录等稳定路径。
-- `src/atri_voice_service/config.py`：语音服务自己的配置和模型路径。
+- `src/atri_qq_bot/runtime/paths.py`：项目根目录、数据目录、模型档案、主动策略、音乐目录等稳定路径。
 
-不要在业务代码里写死本机模型路径、QQ 号、API Key 或用户目录。模型根目录约定由环境变量控制，当前默认本地模型目录为 `D:\本地大模型\models`，AI_ATRI 专用语音模型默认位于其 `AI_ATRI` 子目录。
+不要在业务代码里写死本机模型路径、QQ 号、API Key 或用户目录。模型根目录约定由环境变量控制，当前默认本地模型目录为 `D:\本地大模型\models`。
 
 ### 3.2 OneBot 和消息并发
 
@@ -70,7 +67,7 @@ NapCat QQ
 - 消息去重、短时间合并和回复策略。
 - 群聊图片先发、随后 @ 的临时材料绑定。
 - 视觉上下文缓存和过期处理。
-- 语音输入、语音输出、表情发送。
+- 表情发送、点歌语音交付。
 - 早安、空闲关怀、群聊主动互动和主动规划 v2。
 
 重要 ID 规则：
@@ -90,7 +87,7 @@ NapCat QQ
 - 当前消息、近期历史、用户档案、群聊上下文。
 - 工具调用后的结果注入。
 - 回复质量修复、语言守卫和有限降级。
-- 语音请求消费和主动消息生成。
+- 主动消息生成。
 
 原则：
 
@@ -166,30 +163,25 @@ NapCat QQ
 
 发送优先级应保持：人工添加素材 > 聊天记录归档 > 默认联网缓存 > URL > QQ 自带表情/emoji。
 
-### 3.8 语音系统
+### 3.8 音乐交付与歌声工程
 
-QQ 侧：`src/atri_qq_bot/voice/`
+QQ 侧：`src/atri_qq_bot/music/`
 
-- `manager.py`：ASR/TTS 调用、冷却、QQ 会话单次低延迟合成。
-- `policy.py`：语音行为和概率配置。
-- `segmentation.py`：长文本切段。
-- `delivery.py`：发送语音。
-- `calls.py`：QQ 通话邀请和会话状态。
-- `client.py`：调用独立语音服务。
+- `library.py`：本地歌库检索、交付边界规划（复用 `tools/voice/analyze_song_structure.py`）。
+- `session.py`：`detect_explicit_delivery_intent` 识别显式点歌意图，按文件名匹配 `data/music/完整音乐` 后以 QQ 语音整曲发送。
+- `online.py`：在线补充；`ONLINE_MUSIC_ENABLED` 开启时，本地没有的歌走网易云音乐公开接口搜索并以 QQ 语音发送。
 
-服务侧：`src/atri_voice_service/`
+歌声工程（离线管线）：`tools/voice/`
 
-- `server.py`：HTTP 服务和 `/health`、转写、合成、歌唱任务接口。
-- `speech_pipeline.py`：日常语音合成和识别。
-- `providers.py`：ASR/TTS provider。
-- `original_library.py`：官方原声素材匹配。
-- `quality.py`：质量门。
-- `singing*.py`：歌唱任务分支。
-- `profiles.py`：音色档案。
+- `singing_audio_engineering.py`：乐句规划、音频工程核心。
+- `separate_singing_stems.py`：分轨。
+- `seed_vc_singing_adapter.py`：Seed-VC 歌声转换。
+- `mix_singing_audio.py`：混音。
+- `setup-seed-vc-singing.ps1`：Seed-VC 运行时安装。
 
-语音不是文本回复的替代链路。文本已经生成后，语音策略根据明确要求、情绪、概率、好感度、活跃度、群聊开关和冷却决定是否附加语音。合成失败时要记录短错误，并按配置使用原声素材或保留文本；不能调用 Microsoft Huihui 作为隐藏最终兜底。
+运行时由外部 AI_music 桥接（`http://127.0.0.1:8793`）负责导唱处理、Seed-VC 歌声转换、伴奏混音和任务管理；WebUI 的歌曲合成页通过 `/api/music/overview` 代理其健康状态和歌曲工程列表。歌声参考音源目录由 `.env` 的 `ATRI_ORIGINAL_VOICE_LIBRARY` 控制，默认 `C:\Users\YOUR_NAME\Music\ATRI训练音频素材`。
 
-原声素材默认目录：`C:\Users\YOUR_NAME\Music\ATRI训练音频素材`。用户上传更多素材后，先经过索引、文本/情绪标签和匹配测试，再进入自动选择；不要未经验证就覆盖主音色模型。
+点歌不是文本回复的替代链路：模型回复保持文本，点歌交付由 `music/session.py` 的显式意图识别独立处理，交付结果写入 `logs/voice-events.log`。
 
 ### 3.9 WebUI 和模型档案
 
@@ -198,7 +190,6 @@ QQ 侧：`src/atri_qq_bot/voice/`
 - 模型档案：`src/atri_webui/model_profiles.py`。
 - 模型档案数据：`data/webui/model_profiles.json`。
 - 主动互动策略：`data/webui/proactive_policy.json`。
-- 语音行为：`data/webui/voice_behavior.json`。
 
 模型分类是独立的：聊天模型、视觉模型、向量模型分别管理，同一类别才允许一个启用项。新增模型必须支持发现、编辑、删除、保存、启用、刷新后的持久化，并且启用前验证 provider、base URL、模型名和本地 Ollama 实际可运行状态。
 
@@ -218,10 +209,10 @@ cd "<项目根目录>"
 1. `8765` 监听并有 NapCat OneBot 连接。
 2. `8787` WebUI 可访问。
 3. `/api/test-chat` 返回 `ok=true`、`used_ai=true`。
-4. 需要语音时再检查 `8790/health`，不要因为语音服务未启用阻塞主聊天。
+4. 需要歌曲合成时再检查 AI_music 桥接 `8793/api/health`，不要因为它未启动阻塞主聊天。
 5. 检查 Ollama 模型是否能被实际调用，不只检查模型文件是否存在。
 
-主服务启动不应主动加载视觉模型、语音大模型或全部本地模型。重型模型按请求加载；显存不足时保持角色模型串行。
+主服务启动不应主动加载视觉模型或全部本地模型。重型模型按请求加载；显存不足时保持角色模型串行。
 
 ## 5. 当前稳定基线
 
@@ -238,7 +229,7 @@ cd "<项目根目录>"
 
 - 视觉模型首次冷加载较慢，但这是为了避免聊天模型和视觉模型同时占满显存。
 - 通用 8B 视觉模型对动漫角色身份并非可靠数据库；无法确认时必须说未确认，不能用相似角色名硬填。
-- 语音服务、视觉服务和聊天服务是不同链路，任何一条失败都不应让正常文字聊天整体失败。
+- AI_music 桥接、视觉服务和聊天服务是不同链路，任何一条失败都不应让正常文字聊天整体失败。
 - 工作区存在大量历史改动，禁止使用 `git reset --hard`、`git checkout --` 或批量回退来“恢复稳定”。处理前先看 `git status` 和具体 diff。
 
 ## 6. 新功能/新模型接入流程
@@ -246,7 +237,7 @@ cd "<项目根目录>"
 以后每次开发必须按这个顺序走：
 
 1. 先描述现有链路：入口、配置、运行时对象、持久化、发送出口和失败出口。
-2. 明确新功能属于哪个边界：OneBot、工具、回复、人设、记忆、语音、WebUI 或独立服务。
+2. 明确新功能属于哪个边界：OneBot、工具、回复、人设、记忆、点歌、WebUI 或独立服务。
 3. 先加配置 schema、loader、WebUI 展示和持久化，再接运行时；配置要有默认值和关闭开关。
 4. 新模型先做独立健康检查和最小调用，不要直接替换当前生产模型。
 5. 记录模型的 provider、base URL、模型名、能力类型、显存/内存需求、上下文长度、超时和卸载策略。
@@ -275,7 +266,7 @@ cd "<项目根目录>"
 - OneBot 原始事件：`logs/onebot-events.log`。
 - 回复链路：`logs/reply-events.jsonl`。
 - 视觉分析：`logs/vision-events.jsonl`。
-- 语音相关：`logs/voice-events.log` 以及语音服务自身输出。
+- 歌曲交付：`logs/voice-events.log`（点歌发送状态与失败原因）。
 - 工具调用：`logs/llm-tools.jsonl`。
 - 记忆数据：`data/memory/users.json`。
 
@@ -284,7 +275,7 @@ cd "<项目根目录>"
 1. 先看消息是否进入 OneBot、是否被正确分配会话队列。
 2. 再看 `reply-events.jsonl` 的 `used_ai`、错误和回复阶段。
 3. 如果有材料，看 toolbox/vision 日志确认当前文件、模型、耗时和原始输出。
-4. 如果文本正常、语音失败，只排查 VoiceManager 到语音服务的链路。
+4. 如果文本正常、点歌失败，只排查 `music/` 到 QQ 语音发送的交付链路。
 5. 如果 WebUI 修改重启后丢失，先检查 `.env`、`data/webui/*.json` 和 reload/save 接口，不要直接改内存对象。
 
 ## 8. 禁止事项
@@ -300,4 +291,4 @@ cd "<项目根目录>"
 
 ## 9. 交接结论
 
-这个项目现在不是“一个 Python 文件调用一个模型”，而是一个由 OneBot 入口、回复引擎、材料工具、记忆、语音独立服务、WebUI 和桌宠组成的多服务系统。稳定性的关键不是增加更多兜底模板，而是保持边界清晰、配置可持久化、模型按能力隔离、错误可观测、重型资源串行调度，并且每次改动都完成真实链路验收。
+这个项目现在不是“一个 Python 文件调用一个模型”，而是一个由 OneBot 入口、回复引擎、材料工具、记忆、音乐交付、WebUI 和桌宠组成的多服务系统。稳定性的关键不是增加更多兜底模板，而是保持边界清晰、配置可持久化、模型按能力隔离、错误可观测、重型资源串行调度，并且每次改动都完成真实链路验收。

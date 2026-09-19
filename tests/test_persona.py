@@ -148,7 +148,6 @@ def test_visual_evidence_is_after_history_and_unrelated_memory_is_suppressed(
                 "preferred_parts": 2,
             },
             tool_context=visual,
-            allow_reply_voice=False,
         )
     )
 
@@ -1144,7 +1143,6 @@ def test_normal_private_turn_injects_actual_assistant_history_without_singing(
             "找出这串数字的规律",
             None,
             profile_id="private:10001",
-            allow_reply_voice=False,
         )
     )
 
@@ -1187,7 +1185,6 @@ def test_group_turn_keeps_lore_and_capability_self_knowledge(tmp_path, monkeypat
             "group:20001",
             "你是谁，会做什么？",
             "群友A",
-            allow_reply_voice=False,
         )
     )
 
@@ -1232,7 +1229,6 @@ def test_ordinary_group_chat_does_not_inject_full_lore_or_capability_catalog(
             "group:20001",
             "今天吃过饭了吗？",
             "群友A",
-            allow_reply_voice=False,
         )
     )
 

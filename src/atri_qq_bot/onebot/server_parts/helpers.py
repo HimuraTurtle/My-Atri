@@ -6,25 +6,6 @@ from typing import Any
 
 from ..message_batch import _message_to_segments
 
-def _voice_remaining_text(
-    original_text: str,
-    segments: list[str],
-    delivered_segments: list[str],
-    failed_index: int,
-) -> str:
-    """返回语音失败后尚未呈现的文本，尽量保留原回复的标点。"""
-    original = str(original_text or "").strip()
-    if not delivered_segments:
-        return original
-
-    delivered_prefix = "".join(delivered_segments)
-    if original.startswith(delivered_prefix):
-        remainder = original[len(delivered_prefix) :]
-        return remainder.lstrip(" \t\r\n，,、：:；;。！？!?-—")
-    # 角色提示词可能包含已被语音清洗器移除的舞台动作，此时无法安全地
-    # 用原文定位前缀，退回到已清洗的未发送片段，确保不重复发送已发语音。
-    return "".join(segments[failed_index:]).strip()
-
 
 def _onebot_status_is_healthy(result: dict[str, Any] | None) -> bool:
     if not isinstance(result, dict):

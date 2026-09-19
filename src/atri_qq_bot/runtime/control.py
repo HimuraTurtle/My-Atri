@@ -372,7 +372,6 @@ def runtime_status(config: BotConfig) -> dict[str, Any]:
         "napcat_probe_age_seconds": round(probe_age_seconds, 1) if probe_age_seconds is not None else None,
         "ollama": ollama_running,
         "ollama_on_demand": ollama_on_demand,
-        "voice": _is_port_listening(rows, 8790),
         "webui": True,
         "bot_qq": config.bot_qq,
         "onebot": f"ws://{config.host}:{config.port}/onebot",

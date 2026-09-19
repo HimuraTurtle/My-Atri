@@ -160,18 +160,6 @@ class BotConfig:
     search_provider: str = "auto"
     bocha_api_key: str | None = None
     web_grounding_review_enabled: bool = True
-    voice_asr_enabled: bool = False
-    voice_tts_enabled: bool = False
-    voice_service_url: str = "http://127.0.0.1:8790"
-    voice_service_timeout_seconds: float = 180.0
-    voice_profile: str = "atri"
-    voice_zh_profile: str = ""
-    voice_group_enabled: bool = False
-    voice_reply_to_voice: bool = False
-    voice_max_chars: int = 160
-    voice_segment_max_chars: int = 100
-    voice_cooldown_seconds: int = 30
-    voice_input_max_bytes: int = 20_000_000
     online_music_enabled: bool = True
     # Suwayomi 漫画助手：GraphQL 客户端、订阅推送与 LLM 工具。
     manga_enabled: bool = True

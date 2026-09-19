@@ -257,7 +257,7 @@ class HandlerInsightsMixin(WebUIHandlerMixin):
                 answer=answer,
                 context=str(payload.get("context") or ""),
                 source="model",
-                model_type=str(payload.get("model_type") or "chat").strip() if str(payload.get("model_type") or "chat").strip() in {"chat", "vision", "voice"} else "chat",
+                model_type=str(payload.get("model_type") or "chat").strip() if str(payload.get("model_type") or "chat").strip() in {"chat", "vision"} else "chat",
                 model_name=str(payload.get("model_name") or "").strip()[:160],
             )
             evaluation_id = run_coro(self._insights_runtime().evaluations.enqueue(sample))

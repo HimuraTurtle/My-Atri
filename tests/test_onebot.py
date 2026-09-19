@@ -23,7 +23,6 @@ from atri_qq_bot.onebot.server import (
     _should_reuse_cached_visual,
     _onebot_status_is_healthy,
 )
-from atri_qq_bot.voice import SynthesisResult, VoiceRequest
 
 
 def test_onebot_status_probe_requires_real_online_and_good_flags() -> None:
@@ -36,37 +35,6 @@ def test_onebot_status_probe_requires_real_online_and_good_flags() -> None:
     assert not _onebot_status_is_healthy(
         {"status": "ok", "retcode": 0, "data": {"online": True, "good": False}}
     )
-
-
-def test_conversational_tts_has_no_second_fixed_onebot_timeout(
-    tmp_path,
-    monkeypatch,
-) -> None:
-    output = tmp_path / "speech.wav"
-    output.write_bytes(b"RIFFvoice")
-    server = object.__new__(OneBotServer)
-
-    class FakeVoice:
-        async def synthesize(self, *args, **kwargs):
-            await asyncio.sleep(0.02)
-            return SynthesisResult(output)
-
-    server.voice = FakeVoice()
-    monkeypatch.setattr(
-        "atri_qq_bot.onebot.server.VOICE_SEGMENT_SYNTH_TIMEOUT_SECONDS",
-        0.001,
-        raising=False,
-    )
-
-    result = asyncio.run(
-        server._synthesize_voice_segment(
-            "private:10001",
-            VoiceRequest("早安", reason="explicit_request"),
-            enforce_cooldown=True,
-        )
-    )
-
-    assert result.audio_path == output
 
 
 def test_send_group_summary_uses_its_own_delivery_context(tmp_path) -> None:

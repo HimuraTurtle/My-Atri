@@ -29,16 +29,12 @@ BOT_PORT = 8765
 QZONE_BRIDGE_PORT = 5700
 MAIBOT_PORT = 8001
 OLLAMA_PORT = 11434
-VOICE_PORT = 8790
 MUSIC_BRIDGE_PORT = 8793
-GPT_SOVITS_PORT = 9880
 NAPCAT_CONNECTION_POLL_SECONDS = 0.75
 OPTIONAL_SERVICES_WAIT_SECONDS = 30
 OPTIONAL_SERVICES_STAGGER_SECONDS = 2.0
 DEFAULT_OLLAMA_MODELS = Path.home() / ".ollama" / "models"
-DEFAULT_VOICE_ASCII_MODELS = Path(r"D:\AtriModels")
 WEBUI_STATUS_URL = "http://127.0.0.1:8787/api/status"
-VOICE_HEALTH_URL = f"http://127.0.0.1:{VOICE_PORT}/health"
 LOG_DIR = PROJECT_DIR / "logs"
 LOG_FILE = LOG_DIR / "hidden-launcher.log"
 NAPCAT_STATE_FILE = PROJECT_DIR / "data" / "runtime" / "napcat-state.json"
@@ -622,27 +618,6 @@ def ollama_models_path() -> Path:
     return Path(configured) if configured else DEFAULT_OLLAMA_MODELS
 
 
-def voice_models_root() -> Path:
-    configured = (
-        project_env_value("ATRI_MODELS_ROOT")
-        or os.environ.get("ATRI_MODELS_ROOT", "")
-    ).strip()
-    if configured:
-        return Path(configured).expanduser()
-    if DEFAULT_VOICE_ASCII_MODELS.is_dir():
-        return DEFAULT_VOICE_ASCII_MODELS
-    return ollama_models_path() / "AI_ATRI"
-
-
-def voice_runtime_candidates() -> tuple[Path, ...]:
-    models_path = ollama_models_path()
-    return (
-        PROJECT_DIR / "data" / "runtime" / "voice-runtime",
-        models_path / "manifests" / "atri-runtime",
-        models_path.parent / "Speech" / "atri-runtime",
-    )
-
-
 def ollama_process_env() -> dict[str, str]:
     env = os.environ.copy()
     models_path = ollama_models_path()
@@ -666,122 +641,6 @@ def ollama_process_env() -> dict[str, str]:
     return env
 
 
-def voice_enabled() -> bool:
-    enabled_values = {"1", "true", "yes", "on"}
-    return any(
-        project_env_value(name).strip().lower() in enabled_values
-        for name in ("VOICE_ASR_ENABLED", "VOICE_TTS_ENABLED")
-    )
-
-
-def voice_tts_enabled() -> bool:
-    return project_env_value("VOICE_TTS_ENABLED").strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "on",
-    }
-
-
-def start_gpt_sovits_if_needed() -> None:
-    if not voice_tts_enabled() or port_open(GPT_SOVITS_PORT):
-        return
-    start_script = PROJECT_DIR / "tools" / "voice" / "start-gpt-sovits.ps1"
-    marker = PROJECT_DIR / "data" / "runtime" / "gpt-sovits" / ".dependencies-ready"
-    if not start_script.exists() or not marker.exists():
-        log("Voice synthesis is enabled but GPT-SoVITS is not fully installed.")
-        return
-    log("Starting GPT-SoVITS in background.")
-    popen_hidden(
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-WindowStyle",
-            "Hidden",
-            "-ExecutionPolicy",
-            "Bypass",
-            "-File",
-            str(start_script),
-        ],
-        cwd=PROJECT_DIR,
-    )
-
-
-def start_voice_if_needed(*, wait_for_ready: bool = True) -> None:
-    if not voice_enabled():
-        return
-    already_listening = port_open(VOICE_PORT)
-    if already_listening and not wait_for_ready:
-        log(f"Voice service already listening on {VOICE_PORT}.")
-        return
-    if already_listening and voice_ready():
-        log(f"Voice service already ready on {VOICE_PORT}.")
-        return
-    runtime_candidates = voice_runtime_candidates()
-    runtime_root = next(
-        (
-            candidate
-            for candidate in runtime_candidates
-            if (candidate / ".venv" / "Scripts" / "python.exe").exists()
-        ),
-        runtime_candidates[0],
-    )
-    pythonw = runtime_root / ".venv" / "Scripts" / "pythonw.exe"
-    python = runtime_root / ".venv" / "Scripts" / "python.exe"
-    executable = pythonw if pythonw.exists() else python
-    if not executable.exists():
-        log("Voice feature is enabled but its isolated runtime is not installed.")
-        return
-    env = os.environ.copy()
-    compat_path = str(PROJECT_DIR / "tools" / "voice" / "compat")
-    existing_pythonpath = env.get("PYTHONPATH", "")
-    env["PYTHONPATH"] = os.pathsep.join(
-        part for part in (compat_path, existing_pythonpath) if part
-    )
-    model_root = voice_models_root()
-    env["MODELSCOPE_CACHE"] = str(model_root / "voice" / "modelscope")
-    env["HF_HOME"] = str(model_root / "voice" / "huggingface")
-    env.setdefault("ATRI_ASR_PROVIDER", "sensevoice")
-    local_sensevoice = (
-        Path(env["MODELSCOPE_CACHE"])
-        / "models"
-        / "iic--SenseVoiceSmall"
-        / "snapshots"
-        / "master"
-    )
-    env.setdefault(
-        "ATRI_ASR_MODEL",
-        str(local_sensevoice) if (local_sensevoice / "model.pt").exists() else "iic/SenseVoiceSmall",
-    )
-    env.setdefault("ATRI_ASR_DEVICE", "cpu")
-    # GPT-SoVITS 冷启动可能需要加载数 GB 权重；启动等待与单次推理预算
-    # 分开配置，且成功后保持常驻，避免每轮聊天重新冷启动。
-    env.setdefault("ATRI_TTS_TOTAL_TIMEOUT_SECONDS", "75")
-    env.setdefault("ATRI_TTS_STARTUP_TIMEOUT_SECONDS", "45")
-    env.setdefault("ATRI_TTS_PREWARM_ENABLED", "true")
-    env.setdefault("ATRI_TTS_IDLE_SHUTDOWN_SECONDS", "0")
-    if not already_listening:
-        log("Starting isolated voice service in background.")
-        popen_hidden(
-            [str(executable), "-m", "atri_voice_service"],
-            cwd=PROJECT_DIR,
-            env=env,
-        )
-    else:
-        log("Voice service is listening; waiting for model warmup.")
-    if not wait_for_ready:
-        log("Voice service startup requested; model warmup continues in background.")
-        return
-    for _ in range(60):
-        time.sleep(0.5)
-        if voice_ready():
-            log("Voice service is ready.")
-            return
-    log("Voice service did not report ready within timeout.")
-
-
 def start_music_bridge_if_needed() -> None:
     if port_open(MUSIC_BRIDGE_PORT):
         log(f"AI_music bridge already listening on {MUSIC_BRIDGE_PORT}.")
@@ -800,18 +659,8 @@ def start_music_bridge_if_needed() -> None:
     env = os.environ.copy()
     env.setdefault("ATRI_BRIDGE_HOST", "127.0.0.1")
     env.setdefault("ATRI_BRIDGE_PORT", str(MUSIC_BRIDGE_PORT))
-    env.setdefault("ATRI_VOICE_SERVICE_URL", f"http://127.0.0.1:{VOICE_PORT}")
     log("Starting AI_music bridge in background.")
     popen_hidden([str(executable), str(bridge)], cwd=music_root, env=env)
-
-
-def voice_ready() -> bool:
-    try:
-        with urllib.request.urlopen(VOICE_HEALTH_URL, timeout=1.2) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        return bool(payload.get("ok")) and bool(payload.get("ready"))
-    except (OSError, ValueError):
-        return False
 
 
 def port_open(port: int, host: str = "127.0.0.1") -> bool:
@@ -1499,8 +1348,6 @@ def main(mode: str = "core") -> int:
         "recover",
         "napcat",
         "optional",
-        "voice-asr",
-        "voice-tts",
         "ollama",
         "music",
     }
@@ -1541,13 +1388,6 @@ def main(mode: str = "core") -> int:
             start_maibot_if_needed(wait_for_ready=False)
         except Exception as exc:
             log(f"Optional MaiBot startup failed: {exc}")
-        return 0
-    if normalized_mode == "voice-asr":
-        start_voice_if_needed(wait_for_ready=True)
-        return 0
-    if normalized_mode == "voice-tts":
-        # 只恢复轻量服务；GPT-SoVITS 必须由请求在全局推理锁内启动。
-        start_voice_if_needed(wait_for_ready=True)
         return 0
     if normalized_mode == "ollama":
         start_ollama_if_needed(wait_for_ready=True)
