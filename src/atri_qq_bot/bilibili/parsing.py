@@ -188,4 +188,4 @@ def message_is_pure_link(plain_text: str, event: dict[str, Any]) -> bool:
     stripped = BV_REGEX.sub(" ", stripped)
     stripped = stripped.replace("[分享:", " ").replace("]", " ")
     # 剩余字符（去空白）超过阈值说明还有别的话要说
-    return len("".join(stripped.split())) <= 12
+    return len("".join(stripped.split())) <= 3
