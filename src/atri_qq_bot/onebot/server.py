@@ -32,7 +32,11 @@ from ..insights import (
     context_from_tool_context,
 )
 from ..message_plan import OutgoingMessage, build_outgoing_messages, outgoing_to_onebot_message
-from ..music import SingingConversationController, SingingDecision
+from ..music import (
+    SingingConversationController,
+    SingingDecision,
+    detect_explicit_delivery_intent,
+)
 from ..persona import AtriReplyEngine
 from ..proactive import ProactivePlanner, load_proactive_policy, safe_zoneinfo
 from ..runtime.control import (
@@ -44,22 +48,6 @@ from ..runtime.paths import PROJECT_ROOT
 from ..runtime.modality_access import is_event_modality_allowed
 from ..stickers import StickerManager
 from ..toolbox import ToolAnalyzer
-from ..voice import (
-    VoiceCallStore,
-    VoiceManager,
-    VoicePromptContext,
-    VoiceRequest,
-    SpeechServiceError,
-    build_autonomous_voice_fallback,
-    build_explicit_voice_fallback,
-    detect_explicit_delivery_intent,
-    evaluate_voice_request,
-    find_record_segments,
-    load_voice_behavior,
-    sanitize_voice_request,
-    split_spoken_text,
-    stabilize_explicit_voice_request,
-)
 from atri_webui import bind_loop, start_webui, stop_webui
 from .message_batch import _merge_message_batch, _message_to_segments
 from .message_parser import (
@@ -102,7 +90,6 @@ from .server_parts.helpers import (
     _send_delay,
     _should_reuse_cached_visual,
     _singing_context_id,
-    _voice_remaining_text,
 )
 
 from .server_parts.server_bilibili import OneBotBilibiliMixin

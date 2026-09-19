@@ -43,7 +43,7 @@ class SemanticUnderstanding:
         real_action = any(term in text for term in _ACTION)
         entities = _entities(text)
         action_domain = _action_domain(text, state, relation, external)
-        if action_domain in {"music.sing", "voice.speak"}:
+        if action_domain == "music.sing":
             real_action = True
         inherited_constraints = state.goal.constraints if relation in {"continue", "modify", "correct"} else ()
         new_constraints: list[str] = []
@@ -95,8 +95,6 @@ def _action_domain(
 
     if any(term in text for term in ("唱", "歌曲", "来一首", "换一首", "下一首")):
         return "music.sing"
-    if any(term in text for term in ("发语音", "语音说", "读出来", "念给我", "用日语说")):
-        return "voice.speak"
     if any(term in text for term in ("图片", "图里", "表情包", "视频", "画面", "这是谁")):
         return "vision.understand"
     if any(term in text for term in ("天气", "下雨", "温度", "气温", "降温")):

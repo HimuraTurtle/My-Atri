@@ -37,21 +37,11 @@ from ..lore import (
     lore_direct_reply,
 )
 from ..memory import UserMemoryStore, is_memory_pollution_text
-from ..music import delivery_song_catalog_prompt
+from ..music import detect_explicit_delivery_intent, delivery_song_catalog_prompt
 from ..prompting import load_prompt, render_prompt
 from ..proactive import morning_greeting_text, safe_zoneinfo
 from ..runtime.inference_lock import InferencePriority, inference_resource_lease
 from ..runtime.services import ensure_ollama_service, release_ollama_model
-from ..voice import (
-    CallInviteRequest,
-    VoiceRequest,
-    detect_explicit_delivery_intent,
-    evaluate_call_request,
-    evaluate_reply_voice_choice,
-    evaluate_voice_request,
-    load_voice_behavior,
-    voice_policy_prompt,
-)
 
 
 PERSONA_PROMPT = load_prompt("atri_persona")

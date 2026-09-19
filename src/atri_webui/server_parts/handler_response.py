@@ -46,20 +46,6 @@ class HandlerResponseMixin(WebUIHandlerMixin):
         self.end_headers()
         self.wfile.write(content)
 
-    def _send_voice_audio(self, query: str) -> None:
-        raw_path = parse_qs(query).get("path", [""])[0]
-        path = resolve_voice_audio(raw_path)
-        if path is None:
-            return self._send_error(HTTPStatus.NOT_FOUND, "audio not found")
-        content = path.read_bytes()
-        content_type = mimetypes.guess_type(path.name)[0] or "audio/wav"
-        self.send_response(HTTPStatus.OK)
-        self.send_header("Content-Type", content_type)
-        self.send_header("Cache-Control", "no-store")
-        self.send_header("Content-Length", str(len(content)))
-        self.end_headers()
-        self.wfile.write(content)
-
     def _send_delivery_song_audio(self, query: str) -> None:
         """试听端点只允许读取 WebUI 片段库；QQ 整首发送不经过 HTTP。"""
         raw_path = parse_qs(query).get("path", [""])[0]

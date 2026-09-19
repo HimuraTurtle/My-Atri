@@ -29,25 +29,15 @@ class OneBotDeliveryMixin(OneBotServerMixin):
         event: dict[str, Any],
         user_text: str,
         decision: SingingDecision,
-        *,
-        request: VoiceRequest | None = None,
     ) -> tuple[list[OutgoingMessage], str]:
         """将点歌决策转换为唯一一种 OneBot 输出，并记录可诊断事件。"""
 
-        voice_request = request or VoiceRequest(
-            text=str(user_text or "")[: max(20, int(self.config.voice_max_chars))],
-            reason="explicit_request",
-            mode="singing",
-            song_title=decision.song.title if decision.song else "",
-            segment_index=None,
-        )
         if decision.song is not None and decision.segment is not None:
             fallback_text = f"《{decision.song.title}》完整歌曲"
             message = OutgoingMessage("record", str(decision.segment.path))
             self._log_voice_event(
                 event,
                 "complete_song_selected",
-                request=voice_request,
                 message=message,
                 error=decision.reason,
             )
@@ -57,7 +47,6 @@ class OneBotDeliveryMixin(OneBotServerMixin):
         self._log_voice_event(
             event,
             "song_unavailable" if decision.reason not in {"catalog", "stopped"} else "singing_guidance",
-            request=voice_request,
             error=decision.reason,
         )
         return [OutgoingMessage("text", reply_text)], ""
@@ -197,120 +186,6 @@ class OneBotDeliveryMixin(OneBotServerMixin):
             return event
         return _merge_pending_visual_event(pending[1], event)
 
-    async def _send_streamed_speech_reply(
-        self,
-        websocket: Any,
-        event: dict[str, Any],
-        conversation_id: str,
-        request: Any,
-    ) -> str:
-        segments = split_spoken_text(
-            request.text,
-            maximum_units=int(
-                getattr(self.config, "voice_segment_max_chars", 34) or 34
-            ),
-        )
-        if not segments:
-            return ""
-
-        delivered_segments: list[str] = []
-        for index, text in enumerate(segments):
-            segment_started_at = time.monotonic()
-            segment_request = replace(request, text=text)
-            try:
-                synthesis = await self._synthesize_voice_segment(
-                    conversation_id,
-                    segment_request,
-                    enforce_cooldown=index == 0,
-                )
-                self._log_voice_event(
-                    event,
-                    "synthesized",
-                    request=segment_request,
-                    result=synthesis,
-                    elapsed_ms=(time.monotonic() - segment_started_at) * 1000,
-                )
-                delivered = await self.send_reply(
-                    websocket,
-                    event,
-                    [OutgoingMessage("record", str(synthesis.audio_path))],
-                    fallback_text=text,
-                    model_type="voice",
-                    model_name=self._delivery_model_name("voice"),
-                )
-                if not delivered:
-                    # 音频文件已经生成，但 NapCat 可能拒绝了 record 上传。
-                    # 不能因为语音通道失败而吞掉已经生成好的回复文本。
-                    remaining_text = _voice_remaining_text(
-                        request.text,
-                        segments,
-                        delivered_segments,
-                        index,
-                    )
-                    text_delivered = await self.send_reply(
-                        websocket,
-                        event,
-                        [OutgoingMessage("text", remaining_text)],
-                        model_type="voice",
-                        model_name=self._delivery_model_name("voice"),
-                    )
-                    if text_delivered:
-                        return "".join(delivered_segments) + text_delivered
-                    return ""
-                delivered_segments.append(text)
-            except Exception as exc:
-                LOGGER.error(
-                    "语音分段合成失败：conversation=%s segment=%s error=%s",
-                    conversation_id,
-                    index + 1,
-                    exc,
-                )
-                self._log_voice_event(
-                    event,
-                    "synthesis_failed",
-                    request=segment_request,
-                    error=exc,
-                    elapsed_ms=(time.monotonic() - segment_started_at) * 1000,
-                )
-                # TTS 是可选的呈现方式，不应成为回复链路的单点故障。
-                # 已成功发送的语音不再重复；只把尚未发送的部分转成文本。
-                remaining_text = _voice_remaining_text(
-                    request.text,
-                    segments,
-                    delivered_segments,
-                    index,
-                )
-                text_delivered = await self.send_reply(
-                    websocket,
-                    event,
-                    [OutgoingMessage("text", remaining_text)],
-                    model_type="voice",
-                    model_name=self._delivery_model_name("voice"),
-                )
-                if text_delivered:
-                    return "".join(delivered_segments) + text_delivered
-                return ""
-            if index < len(segments) - 1:
-                await asyncio.sleep(_send_delay(self.config))
-        return str(request.text or "").strip()
-
-    async def _synthesize_voice_segment(
-        self,
-        conversation_id: str,
-        request: VoiceRequest,
-        *,
-        enforce_cooldown: bool,
-    ) -> Any:
-        """One guarded seam for all conversational TTS segments."""
-
-        if enforce_cooldown:
-            return await self.voice.synthesize(conversation_id, request)
-        return await self.voice.synthesize(
-                conversation_id,
-                request,
-                enforce_cooldown=False,
-            )
-
     def _delivery_model_name(self, model_type: str) -> str:
         if model_type == "vision":
             return str(
@@ -319,11 +194,8 @@ class OneBotDeliveryMixin(OneBotServerMixin):
                 or ""
             )[:160]
         if model_type == "voice":
-            return str(
-                getattr(self.config, "voice_zh_profile", "")
-                or getattr(self.config, "voice_profile", "")
-                or ""
-            )[:160]
+            # 点歌发送的是本地成品歌曲，不经过任何合成模型。
+            return "complete_song"
         return str(getattr(self.config, "openai_model", "") or "")[:160]
 
     async def send_reply(

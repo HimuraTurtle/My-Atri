@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from ..prompting import load_prompt
-from ..voice.policy import load_voice_behavior
 from .agent_protocol import AGENT_ACTION_PROMPT, final_answer_schema
 
 
@@ -35,10 +34,6 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
         tools.append(_weather_schema())
         tools.append(_web_search_schema(config))
         tools.append(_web_page_schema())
-    if bool(getattr(config, "voice_tts_enabled", False)):
-        tools.append(_voice_schema(config))
-        if load_voice_behavior().get("calls_enabled", False):
-            tools.append(_voice_call_schema())
     if bool(getattr(config, "llm_agent_protocol_enabled", False)):
         tools.append(final_answer_schema(getattr(config, "max_tokens", 1200) * 4))
     return tools
@@ -353,109 +348,4 @@ def _weather_schema() -> dict[str, Any]:
     }
 
 
-def _voice_schema(config: Any) -> dict[str, Any]:
-    max_chars = max(20, int(getattr(config, "voice_max_chars", 160) or 160))
-    return {
-        "type": "function",
-        "function": {
-            "name": "speak_as_atri",
-            "description": "让亚托莉用角色语音说一小段话。仅在用户想听语音或语音明显比文字更合适时调用；mode=singing 仅限用户明确要求唱歌，系统只会按歌名发送完整音乐目录中的整首成品，绝不临时合成或朗读歌词。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "text": {
-                        "type": "string",
-                        "description": (
-                            f"要说出的完整口语文本，不含网址或舞台说明，最多 {max_chars} 字。"
-                            "必须直接书写目标语言：中文用汉字，日语用假名/汉字，英文用英文；"
-                            "禁止罗马音、拼音、语言标签和翻译说明。"
-                        ),
-                        "maxLength": max_chars,
-                    },
-                    "emotion": {
-                        "type": "string",
-                        "description": (
-                            "这句话实际要表达的语气。neutral=平静，gentle=温柔安慰，"
-                            "happy=开心/得意/玩笑，shy=害羞/撒娇，sad=低落，"
-                            "serious=认真提醒，sleepy=困倦/晚安，surprised=惊讶。"
-                        ),
-                        "enum": [
-                            "neutral",
-                            "gentle",
-                            "happy",
-                            "shy",
-                            "sad",
-                            "serious",
-                            "sleepy",
-                            "surprised",
-                        ],
-                    },
-                    "intensity": {
-                        "type": "number",
-                        "minimum": 0,
-                        "maximum": 1,
-                        "description": (
-                            "情绪强度，普通自然口语建议 0.45-0.65，"
-                            "明显情绪建议 0.65-0.8，避免无故填满。"
-                        ),
-                    },
-                    "language": {
-                        "type": "string",
-                        "enum": ["auto", "zh", "ja", "en"],
-                    },
-                    "reason": {
-                        "type": "string",
-                        "enum": [
-                            "explicit_request",
-                            "voice_reply",
-                            "autonomous",
-                            "proactive",
-                        ],
-                        "description": "本次发语音的真实触发原因。",
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["speech", "singing"],
-                        "description": "普通语音使用 speech；仅在用户明确要求唱歌或哼唱时使用 singing。唱歌只匹配完整音乐目录中的整首成品。",
-                    },
-                    "song_title": {
-                        "type": "string",
-                        "description": "mode=singing 时填写用户点名的已学会歌曲名；没有点名时留空，不要编造歌名。",
-                        "maxLength": 120,
-                    },
-                    "segment_index": {
-                        "type": "integer",
-                        "minimum": 1,
-                        "maximum": 99,
-                        "description": "兼容字段。mode=singing 现在始终发送整首歌曲，用户提到片段或高潮时也请留空。",
-                    },
-                    "segment_hint": {
-                        "type": "string",
-                        "description": "用户说“开头/高潮/后半段”等非编号段落时填写原意，供本地选择器兜底。",
-                        "maxLength": 80,
-                    },
-                },
-                "required": ["text", "reason"],
-            },
-        },
-    }
 
-
-def _voice_call_schema() -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": "offer_voice_call",
-            "description": "向当前私聊用户发起浏览器实时语音通话邀请。仅在用户明确要求或亲密且适合连续交谈时使用。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "topic": {
-                        "type": "string",
-                        "description": "这次想聊的简短主题，可留空。",
-                        "maxLength": 120,
-                    }
-                },
-            },
-        },
-    }

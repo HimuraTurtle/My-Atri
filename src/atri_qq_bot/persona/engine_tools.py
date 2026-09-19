@@ -22,7 +22,6 @@ class EngineToolsMixin(PersonaEngineMixin):
         reply_focus: GroupReplyFocus | None = None,
         temperature_override: float | None = None,
         frequency_penalty_override: float | None = None,
-        allow_reply_voice: bool | None = None,
     ) -> str:
         import httpx
 
@@ -61,28 +60,6 @@ class EngineToolsMixin(PersonaEngineMixin):
         elif repair_mode:
             messages.append({"role": "system", "content": COMFORT_REPAIR_PROMPT})
         tool_schemas = available_tool_schemas(self.config)
-        voice_profile = (
-            self.memory.profile(conversation_id)
-            if conversation_id.startswith("group:")
-            else profile or self.memory.profile(profile_id or conversation_id)
-        )
-        if allow_reply_voice is None:
-            policy = load_voice_behavior()
-            allow_reply_voice = evaluate_reply_voice_choice(
-                conversation_id,
-                voice_profile,
-                policy,
-                explicit_request=detect_explicit_delivery_intent(user_text) is not None,
-                replying_to_voice=bool(
-                    getattr(tool_context, "prefer_voice_reply", False)
-                ),
-            ).allowed
-        if not allow_reply_voice:
-            tool_schemas = [
-                schema
-                for schema in tool_schemas
-                if schema.get("function", {}).get("name") != "speak_as_atri"
-            ]
         agent_protocol_enabled = bool(
             getattr(self.config, "llm_agent_protocol_enabled", False)
         )
@@ -105,20 +82,6 @@ class EngineToolsMixin(PersonaEngineMixin):
                         f"系统运行时刻：{local_now:%Y-%m-%d %H:%M:%S %z}。"
                         "这是当前真实日期，构造“最近/最新/今天”的搜索关键词时必须以此为准，"
                         "不得使用模型训练记忆里的旧年月；需要精确时间时仍调用 get_current_time。"
-                    ),
-                }
-            )
-        has_voice_tool = any(
-            schema.get("function", {}).get("name") == "speak_as_atri"
-            for schema in tool_schemas
-        )
-        if has_voice_tool:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": voice_policy_prompt(
-                        conversation_id,
-                        voice_profile,
                     ),
                 }
             )
@@ -211,9 +174,9 @@ class EngineToolsMixin(PersonaEngineMixin):
                     "content": (
                         "这是本机已准备好的 QQ 整首歌曲清单：\n"
                         + delivery_song_catalog_prompt()
-                        + "\n如果用户明确要唱歌，调用 speak_as_atri，mode=singing；"
-                        "必须从清单选择 song_title，用户指定段落时填写 segment_index。"
-                        "用户说随便唱或让你挑选时，可以从清单自然选择一首，不要反复追问。"
+                        + "\n用户明确要求唱歌时，系统会自动从清单选择并发送整首歌曲，"
+                        "你不需要在回复里假装唱歌或粘贴歌词；"
+                        "用户说随便唱或让你挑选时，可以自然地推荐清单中的一首。"
                     ),
                 }
             )
@@ -515,15 +478,6 @@ class EngineToolsMixin(PersonaEngineMixin):
         arguments: dict[str, Any],
         config: Any,
     ) -> str | None:
-        profile = self.memory.profile(conversation_id)
-        policy = load_voice_behavior()
-        if name == "offer_voice_call":
-            decision = evaluate_call_request(conversation_id, profile, policy)
-            if not decision.allowed:
-                return f"通话邀请未获允许：{decision.reason}。请继续用文字自然回复。"
-            topic = str(arguments.get("topic") or "").strip()[:120]
-            self._pending_call_requests[conversation_id] = CallInviteRequest(topic)
-            return "通话邀请已接受。最终回复不要再重复邀请，也不要编造通话已经接通。"
         if name == "recall_long_term_memory":
             keywords = str(arguments.get("keywords") or "").strip()
             if not keywords:
@@ -535,33 +489,7 @@ class EngineToolsMixin(PersonaEngineMixin):
             return self.memory.recall_living_memory(conversation_id, keywords, limit)
         if name.startswith("suwayomi_"):
             return await self._execute_manga_tool(conversation_id, name, arguments, config)
-        if name != "speak_as_atri":
-            return None
-        try:
-            request = VoiceRequest.from_tool_arguments(
-                arguments,
-                max_chars=int(getattr(config, "voice_max_chars", 160) or 160),
-            )
-        except ValueError as exc:
-            return f"语音请求无效：{exc}。请缩短内容后改用文字回复。"
-        # 歌曲是已准备好的本地片段，不依赖 TTS，也不能由模型自行触发。
-        # 真正的片段匹配由 OneBot 发送层依据用户原消息完成。
-        if request.mode == "singing":
-            if request.reason != "explicit_request":
-                return "唱歌只能在用户明确要求时进行，请直接用文字自然回复。"
-            self._pending_voice_requests[conversation_id] = request
-            return "歌曲请求已接受。最终回复不要重复这段话，也不要声称已经合成歌曲。"
-        if not bool(getattr(config, "voice_tts_enabled", False)):
-            return "语音回复当前未启用，请直接用文字自然回复。"
-        if conversation_id.startswith("group:") and not bool(
-            getattr(config, "voice_group_enabled", False)
-        ):
-            return "当前群聊不允许主动发送语音，请直接用文字自然回复。"
-        decision = evaluate_voice_request(conversation_id, profile, request.reason, policy)
-        if not decision.allowed:
-            return f"语音请求未获允许：{decision.reason}。请直接用文字自然回复。"
-        self._pending_voice_requests[conversation_id] = request
-        return "语音请求已接受。最终回复不要重复这段话，也不要声称发送失败。"
+        return None
 
     async def _execute_manga_tool(
         self,
@@ -902,7 +830,6 @@ class EngineToolsMixin(PersonaEngineMixin):
         iteration_decision: Any | None = None,
         tool_context: Any | None = None,
         reply_focus: GroupReplyFocus | None = None,
-        allow_reply_voice: bool | None = None,
     ) -> str:
         last_reply = ""
         visual_temperature = (
@@ -933,7 +860,6 @@ class EngineToolsMixin(PersonaEngineMixin):
                 iteration_decision=iteration_decision,
                 tool_context=tool_context,
                 reply_focus=reply_focus,
-                allow_reply_voice=allow_reply_voice,
                 temperature_override=temperature,
                 frequency_penalty_override=(
                     None

@@ -220,42 +220,11 @@ def test_append_tool_results_executes_current_time() -> None:
     assert "当前时间" in messages[1]["content"]
 
 
-def test_voice_tool_is_exposed_only_when_tts_is_enabled() -> None:
-    disabled = SimpleNamespace(
-        llm_tools_enabled=True,
-        web_search_enabled=False,
-        voice_tts_enabled=False,
-    )
-    enabled = SimpleNamespace(
-        llm_tools_enabled=True,
-        web_search_enabled=False,
-        voice_tts_enabled=True,
-        voice_max_chars=120,
-    )
-
-    assert "speak_as_atri" not in {
-        item["function"]["name"] for item in available_tool_schemas(disabled)
-    }
-    assert "speak_as_atri" in {
-        item["function"]["name"] for item in available_tool_schemas(enabled)
-    }
-    voice_schema = next(
-        item
-        for item in available_tool_schemas(enabled)
-        if item["function"]["name"] == "speak_as_atri"
-    )
-    text_description = voice_schema["function"]["parameters"]["properties"]["text"][
-        "description"
-    ]
-    assert "禁止罗马音" in text_description
-
-
 def test_weather_tool_is_exposed_with_web_search_tools() -> None:
     enabled = SimpleNamespace(
         llm_tools_enabled=True,
         web_search_enabled=True,
         web_search_max_results=5,
-        voice_tts_enabled=False,
     )
 
     tool_names = {
@@ -279,7 +248,6 @@ def test_final_answer_tool_is_exposed_only_for_opt_in_agent_protocol() -> None:
         llm_tools_enabled=True,
         web_search_enabled=True,
         web_search_max_results=5,
-        voice_tts_enabled=False,
         llm_agent_protocol_enabled=True,
         max_tokens=350,
     )
@@ -330,13 +298,6 @@ def test_web_page_reader_extracts_article_text_and_blocks_private_hosts() -> Non
     )
 
 
-def test_voice_tool_prompt_requires_explicit_requests_in_groups() -> None:
-    assert "明确要求发送或收听语音时，必须调用 speak_as_atri" in TOOL_INSTRUCTION_PROMPT
-    assert "群聊里不方便开麦" in TOOL_INSTRUCTION_PROMPT
-    assert "禁止编造" in TOOL_INSTRUCTION_PROMPT
-    assert "禁止用歌词、动作描写或音乐符号假装已经唱过" in TOOL_INSTRUCTION_PROMPT
-
-
 def test_append_tool_results_allows_a_context_executor() -> None:
     messages: list[dict[str, Any]] = []
     calls: list[tuple[str, dict[str, Any]]] = []
@@ -345,11 +306,11 @@ def test_append_tool_results_allows_a_context_executor() -> None:
         "content": "",
         "tool_calls": [
             {
-                "id": "call-voice",
+                "id": "call-search",
                 "type": "function",
                 "function": {
-                    "name": "speak_as_atri",
-                    "arguments": '{"text":"晚安。","emotion":"gentle"}',
+                    "name": "search_web",
+                    "arguments": '{"query":"晚安 语录"}',
                 },
             }
         ],
@@ -357,7 +318,7 @@ def test_append_tool_results_allows_a_context_executor() -> None:
 
     async def execute(name: str, arguments: dict[str, Any], config: Any) -> str | None:
         calls.append((name, arguments))
-        return "语音请求已接受。"
+        return "搜索完成。"
 
     executed = asyncio.run(
         append_tool_results(
@@ -370,8 +331,8 @@ def test_append_tool_results_allows_a_context_executor() -> None:
     )
 
     assert executed == 1
-    assert calls == [("speak_as_atri", {"text": "晚安。", "emotion": "gentle"})]
-    assert messages[-1]["content"] == "语音请求已接受。"
+    assert calls == [("search_web", {"query": "晚安 语录"})]
+    assert messages[-1]["content"] == "搜索完成。"
 
 
 def test_reply_with_api_runs_tool_call_loop(monkeypatch) -> None:
@@ -639,144 +600,6 @@ def test_agent_loop_rejects_fake_search_and_executes_a_real_search(monkeypatch) 
         message.get("role") == "tool" and message.get("name") == "search_web"
         for message in posted_payloads[2]["messages"]
     )
-
-
-def test_reply_engine_captures_voice_tool_request(monkeypatch) -> None:
-    posted = 0
-
-    class FakeResponse:
-        def __init__(self, payload: dict[str, Any]) -> None:
-            self._payload = payload
-
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return self._payload
-
-    class FakeAsyncClient:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        async def __aenter__(self) -> "FakeAsyncClient":
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            return None
-
-        async def post(self, *args: Any, **kwargs: Any) -> FakeResponse:
-            nonlocal posted
-            posted += 1
-            if posted == 1:
-                return FakeResponse(
-                    {
-                        "choices": [
-                            {
-                                "message": {
-                                    "role": "assistant",
-                                    "content": "",
-                                    "tool_calls": [
-                                        {
-                                            "id": "voice",
-                                            "type": "function",
-                                            "function": {
-                                                "name": "speak_as_atri",
-                                                "arguments": '{"text":"晚安，做个好梦。","emotion":"gentle","reason":"explicit_request"}',
-                                            },
-                                        }
-                                    ],
-                                }
-                            }
-                        ]
-                    }
-                )
-            return FakeResponse(
-                {"choices": [{"message": {"role": "assistant", "content": "已经用语音说啦。"}}]}
-            )
-
-    import httpx
-
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
-    config = BotConfig(
-        bot_qq=100000001,
-        host="127.0.0.1",
-        port=8765,
-        reply_mode="mention",
-        openai_api_key="test-key",
-        openai_base_url="https://example.com/v1",
-        openai_model="test-model",
-        temperature=0.8,
-        max_tokens=350,
-        voice_tts_enabled=True,
-    )
-    engine = AtriReplyEngine(config)
-
-    asyncio.run(engine._reply_with_api("private:10001", "用语音说晚安", None))
-    request = engine.consume_voice_request("private:10001")
-
-    assert request is not None
-    assert request.text == "晚安，做个好梦。"
-    assert request.emotion == "gentle"
-    assert request.reason == "explicit_request"
-    assert engine.consume_voice_request("private:10001") is None
-
-
-def test_reply_probability_gate_hides_only_voice_tool(monkeypatch) -> None:
-    posted_payloads: list[dict[str, Any]] = []
-
-    class FakeResponse:
-        def raise_for_status(self) -> None:
-            return None
-
-        def json(self) -> dict[str, Any]:
-            return {"choices": [{"message": {"role": "assistant", "content": "文字回复"}}]}
-
-    class FakeAsyncClient:
-        def __init__(self, *args: Any, **kwargs: Any) -> None:
-            return None
-
-        async def __aenter__(self) -> "FakeAsyncClient":
-            return self
-
-        async def __aexit__(self, *args: Any) -> None:
-            return None
-
-        async def post(self, *args: Any, **kwargs: Any) -> FakeResponse:
-            posted_payloads.append(kwargs["json"])
-            return FakeResponse()
-
-    import httpx
-
-    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
-    config = BotConfig(
-        bot_qq=100000001,
-        host="127.0.0.1",
-        port=8765,
-        reply_mode="mention",
-        openai_api_key="test-key",
-        openai_base_url="https://example.com/v1",
-        openai_model="test-model",
-        temperature=0.8,
-        max_tokens=350,
-        voice_tts_enabled=True,
-    )
-    engine = AtriReplyEngine(config)
-
-    reply = asyncio.run(
-        engine._reply_with_api(
-            "private:10001",
-            "今天过得怎么样",
-            None,
-            allow_reply_voice=False,
-        )
-    )
-
-    tool_names = {
-        item["function"]["name"] for item in posted_payloads[0].get("tools", [])
-    }
-    assert reply == "文字回复"
-    assert "speak_as_atri" not in tool_names
-    assert "get_current_time" in tool_names
 
 
 # ── DeepSeek DSML 工具调用泄漏（V3.2 偶发把原生标记写进 content）─────

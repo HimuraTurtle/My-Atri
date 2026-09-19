@@ -3,37 +3,13 @@ from __future__ import annotations
 PART = r"""  userDirectoryOpenTab('users');
   setTimeout(()=>selectUserDirectoryUser(String(userId || '').replace(/^person:/,''), true), 80);
 }
-async function loadReplyVoiceProbability() {
-  try {
-    const data = await api('/api/voice/behavior');
-    window._advancedVoiceBehavior = data.behavior || {};
-    const value = Number(window._advancedVoiceBehavior.reply_voice_probability ?? 35);
-    const input = $('replyVoiceProbabilityNumber');
-    if(input) input.value = value;
-  } catch(error) {
-    toast(`语音概率读取失败：${error.message}`);
-  }
-}
-async function saveReplyVoiceProbability() {
-  if(!window._advancedVoiceBehavior) {
-    const data = await api('/api/voice/behavior');
-    window._advancedVoiceBehavior = data.behavior || {};
-  }
-  const probability = Math.min(100, Math.max(0, Math.round(Number($('replyVoiceProbabilityNumber').value) || 0)));
-  const behavior = {...window._advancedVoiceBehavior, reply_voice_probability:probability};
-  await api('/api/voice/save', {method:'POST', body:JSON.stringify({behavior})});
-  window._advancedVoiceBehavior = behavior;
-  if(window._voiceData) window._voiceData.behavior = behavior;
-}
 async function saveConfig() {
   const body = {};
   for (const [key,,type] of fields) {
     const el = $(key); if(!el) continue;
-    if(type==='voice-probability') continue;
     body[key] = type==='checkbox' ? el.checked : el.value;
   }
   await api('/api/config', {method:'POST', body:JSON.stringify(body)});
-  await saveReplyVoiceProbability();
   await loadConfig(); await loadStatus(); await loadProfiles();
   toast('高级配置已保存，新的 QQ 消息会使用新配置');
 }

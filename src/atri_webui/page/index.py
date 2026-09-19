@@ -14,7 +14,6 @@ from .script_summary import PART as SCRIPT_SUMMARY
 from .script_minecraft import PART as SCRIPT_MINECRAFT
 from .script_voice import PART as SCRIPT_VOICE
 from .script_music import PART as SCRIPT_MUSIC
-from .script_singing import PART as SCRIPT_SINGING
 from .script_status import PART as SCRIPT_STATUS
 from .script_models import PART as SCRIPT_MODELS
 from .script_proactive import PART as SCRIPT_PROACTIVE
@@ -41,7 +40,6 @@ def render_index() -> str:
             SCRIPT_MINECRAFT,
             SCRIPT_VOICE,
             SCRIPT_MUSIC,
-            SCRIPT_SINGING,
             SCRIPT_STATUS,
             SCRIPT_MODELS,
             SCRIPT_PROACTIVE,

@@ -19,7 +19,13 @@ from .library import (
     save_complete_song,
 )
 from .online import OnlineSong, resolve_online_singing, search_online_songs
-from .session import SingingConversationController, SingingDecision, SingingSession
+from .session import (
+    ExplicitDeliveryIntent,
+    SingingConversationController,
+    SingingDecision,
+    SingingSession,
+    detect_explicit_delivery_intent,
+)
 
 __all__ = [
     "AUDIO_EXTENSIONS",
@@ -37,7 +43,9 @@ __all__ = [
     "OnlineSong",
     "resolve_online_singing",
     "search_online_songs",
+    "ExplicitDeliveryIntent",
     "SingingConversationController",
     "SingingDecision",
     "SingingSession",
+    "detect_explicit_delivery_intent",
 ]

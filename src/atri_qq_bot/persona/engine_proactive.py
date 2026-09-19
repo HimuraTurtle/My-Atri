@@ -11,7 +11,6 @@ class EngineProactiveMixin(PersonaEngineMixin):
         policy: dict[str, Any],
         now: datetime | None = None,
     ) -> dict[str, str]:
-        self._pending_voice_requests.pop(conversation_id, None)
         timezone = safe_zoneinfo(str(policy.get("timezone") or "Asia/Shanghai"))
         local_now = now.astimezone(timezone) if now else datetime.now(timezone)
         is_group = conversation_id.startswith("group:") and ":user:" not in conversation_id
@@ -96,26 +95,6 @@ class EngineProactiveMixin(PersonaEngineMixin):
             {"role": "system", "content": LANGUAGE_GUARD_PROMPT},
             {"role": "user", "content": prompt},
         ]
-        tool_schemas = [
-            item
-            for item in available_tool_schemas(self.config)
-            if item.get("function", {}).get("name") == "speak_as_atri"
-        ]
-        if tool_schemas:
-            messages.insert(
-                2,
-                {"role": "system", "content": AUTOMATIC_TOOL_INSTRUCTION_PROMPT},
-            )
-            messages.insert(
-                3,
-                {
-                    "role": "system",
-                    "content": (
-                        voice_policy_prompt(conversation_id, profile)
-                        + " 这是主动消息；仅在语音明显更自然时调用，reason 必须填 proactive。"
-                    ),
-                },
-            )
         payload = {
             "model": self.config.openai_model,
             "messages": messages,
@@ -129,9 +108,6 @@ class EngineProactiveMixin(PersonaEngineMixin):
                 self.config.openai_model,
             )
         )
-        if tool_schemas:
-            payload["tools"] = tool_schemas
-            payload["tool_choice"] = "auto"
         headers = {"Authorization": f"Bearer {self.config.openai_api_key}"}
         try:
             import httpx
@@ -142,25 +118,8 @@ class EngineProactiveMixin(PersonaEngineMixin):
             ) as client:
                 data = await self._post_chat_completion(client, headers, payload)
                 message = data["choices"][0]["message"]
-                tool_calls = tool_calls_from_message(message)
-                if tool_calls:
-                    await append_tool_results(
-                        messages,
-                        message,
-                        tool_calls,
-                        self.config,
-                        executor=lambda name, arguments, config: self._execute_context_tool(
-                            conversation_id, name, arguments, config
-                        ),
-                        context_id=conversation_id,
-                    )
-                    followup_payload = dict(payload)
-                    followup_payload["messages"] = messages
-                    data = await self._post_chat_completion(client, headers, followup_payload)
-                    message = data["choices"][0]["message"]
             content = _normalize_reply(str(message.get("content") or ""))
-            has_voice = conversation_id in self._pending_voice_requests
-            if not has_voice and human_pipeline:
+            if human_pipeline:
                 review_messages = list(messages)
                 review_messages.extend(
                     [
@@ -195,7 +154,7 @@ class EngineProactiveMixin(PersonaEngineMixin):
                 if reviewed_content:
                     content = reviewed_content
                     generation_source = "ai-reviewed"
-            elif not has_voice and (
+            elif (
                 _needs_proactive_grounding_repair(content) or _needs_topic_guidance_repair(
                 content,
                 event_type,
@@ -241,7 +200,7 @@ class EngineProactiveMixin(PersonaEngineMixin):
                         "source": "skipped-quality",
                         "error": "主动消息连续未通过真实性或话题质量检查",
                     }
-            if not has_voice and human_pipeline and (
+            if human_pipeline and (
                 _needs_proactive_grounding_repair(content)
                 or _needs_topic_guidance_repair(
                     content,
@@ -255,11 +214,11 @@ class EngineProactiveMixin(PersonaEngineMixin):
                     "error": "主动消息复核后仍缺少可靠依据或自然话题",
                 }
             content = content.strip()[: int(policy.get("max_chars", 90))].strip()
-            if not content and not has_voice:
+            if not content:
                 raise RuntimeError("模型返回空消息")
             return {
                 "text": content,
-                "source": "ai-voice" if has_voice else generation_source,
+                "source": generation_source,
                 "error": "",
             }
         except Exception as exc:

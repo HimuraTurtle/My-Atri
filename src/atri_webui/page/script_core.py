@@ -7,8 +7,7 @@ PART = r"""const fields = [
   ["MESSAGE_SEND_DELAY_MIN","最短发送间隔","number"],
   ["MESSAGE_SEND_DELAY_MAX","最长发送间隔","number"],
   ["STICKER_CHANCE","表情概率","number"],
-  ["STICKER_COOLDOWN_SECONDS","表情冷却秒数","number"],
-  ["REPLY_VOICE_PROBABILITY","语音概率（%）","voice-probability"]
+  ["STICKER_COOLDOWN_SECONDS","表情冷却秒数","number"]
 ];
 const categoryLabels = {
   interest:"兴趣爱好", preference:"偏好/忌口", profile_fact:"用户资料", habit:"生活习惯", communication_style:"聊天习惯",
@@ -58,10 +57,10 @@ function showTab(event, id) {
   (event.currentTarget || event.target).classList.add('active'); $(id).classList.add('active');
   if(id==='users') { loadUserDirectory(true); loadMemory(); loadModalityAccess(); }
   if(id==='memory') loadMemory();
-  if(id==='advanced') { loadConfig(); loadReplyVoiceProbability(); loadProactive(); }
+  if(id==='advanced') { loadConfig(); loadProactive(); }
   if(id==='model') loadProfiles();
   if(id==='voice') loadVoice();
-  if(id==='test') { loadVoiceTestState(); loadDeveloper(false); }
+  if(id==='test') { loadDeveloper(false); }
   if(id==='evaluation') loadEvaluation(false);
   if(id==='minecraft') loadMinecraft();
 }

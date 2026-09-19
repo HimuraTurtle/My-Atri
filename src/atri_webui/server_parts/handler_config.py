@@ -261,31 +261,7 @@ class HandlerConfigMixin(WebUIHandlerMixin):
             return self._send_error(HTTPStatus.INTERNAL_SERVER_ERROR, str(exc))
         self._send_json({"ok": True, **result})
 
-    def _handle_voice_translate(self) -> None:
-        payload = self._read_json()
-        try:
-            result = run_coro(
-                translate_voice_text(
-                    self.webui_state.config,
-                    str((payload or {}).get("text") or ""),
-                    str((payload or {}).get("target_language") or ""),
-                )
-            )
-        except HTTPError as exc:
-            try:
-                detail = json.loads(exc.read().decode("utf-8")).get("error")
-            except Exception:
-                detail = ""
-            return self._send_error(HTTPStatus.BAD_GATEWAY, detail or f"翻译服务返回 HTTP {exc.code}")
-        except Exception as exc:
-            return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
-        self._send_json({"ok": True, **result})
-
-    def _voice_payload(self) -> dict[str, Any]:
-        try:
-            health = run_coro(self.webui_state.server.voice.client.health())
-        except Exception as exc:
-            health = {"ok": False, "error": str(exc), "ready": False}
+    def _music_overview_payload(self) -> dict[str, Any]:
         try:
             music_health = _music_bridge_request("/api/health", timeout=1.5)
             music_service = {
@@ -301,24 +277,10 @@ class HandlerConfigMixin(WebUIHandlerMixin):
                 "error": str(exc),
                 "projects": {},
             }
-        singing = health.get("singing")
-        singing_references = (
-            singing.get("references", [])
-            if isinstance(singing, dict)
-            and isinstance(singing.get("references"), list)
-            else []
-        )
         return {
             "ok": True,
-            "config": config_payload(self.webui_state.config),
-            "service": health,
-            "profiles": voice_profiles_payload(),
-            "candidates": voice_candidates_payload(),
-            "asr_lexicon_text": asr_lexicon_text(),
-            "tts_pronunciation_text": tts_pronunciation_text(),
-            "behavior": load_voice_behavior(),
-            "singing_references": singing_references,
             "music_service": music_service,
+            "singing_references": singing_reference_payload(),
         }
 
 

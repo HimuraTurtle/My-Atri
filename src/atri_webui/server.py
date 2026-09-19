@@ -44,16 +44,9 @@ from atri_qq_bot.music import (
 from atri_qq_bot.runtime.paths import COMPLETE_MUSIC_ROOT, DELIVERY_MUSIC_ROOT
 from atri_qq_bot.insights import group_summary_html, render_group_summary_image, save_insights_env, summary_markdown
 from atri_qq_bot.insights.evaluation import EvaluationSample
-from atri_qq_bot.voice import (
-    VoicePromptContext,
-    VoiceRequest,
-    load_voice_behavior,
-    save_voice_behavior,
-)
 from atri_qq_bot.runtime.control import restart_background_services, runtime_status
 from atri_qq_bot.runtime.modality_access import load_modality_access, save_modality_access
 from .config_admin import config_payload, update_env
-from .call_page import render_voice_call
 from .model_profiles import (
     MODEL_PRESETS,
     activate_model_profile,
@@ -120,26 +113,12 @@ from .sticker_admin import (
     unique_path,
 )
 from .upload_parser import multipart_file, multipart_text, parse_multipart_form
-from .voice_admin import (
-    AUDIO_EXTENSIONS,
-    asr_lexicon_text,
-    resolve_voice_audio,
-    save_asr_lexicon_text,
-    save_reference_audio,
-    save_singing_source_audio,
-    save_test_audio,
-    save_tts_pronunciation_text,
-    save_voice_profile,
-    tts_pronunciation_text,
-    voice_candidates_payload,
-    voice_profiles_payload,
-)
 
 MAX_UPLOAD_BYTES = 8_000_000
-MAX_VOICE_UPLOAD_BYTES = 30_000_000
-MAX_SINGING_UPLOAD_BYTES = 100_000_000
 MAX_MUSIC_STEM_UPLOAD_BYTES = 150_000_000
 MAX_COMPLETE_MUSIC_UPLOAD_BYTES = 180_000_000
+MAX_MUSIC_SOURCE_UPLOAD_BYTES = 100_000_000
+AUDIO_EXTENSIONS = {".wav", ".flac", ".mp3", ".ogg", ".m4a", ".aac"}
 MUSIC_SERVICE_URL = os.getenv(
     "ATRI_MUSIC_SERVICE_URL",
     "http://127.0.0.1:8793",
@@ -153,6 +132,13 @@ MUSIC_IMPORT_ROOT = Path(
         str(Path(__file__).resolve().parents[2] / "data" / "music_imports"),
     )
 ).expanduser().resolve()
+SINGING_REFERENCE_ROOT = Path(
+    os.getenv(
+        "ATRI_ORIGINAL_VOICE_LIBRARY",
+        str(Path.home() / "Music" / "ATRI训练音频素材"),
+    )
+).expanduser().resolve()
+SINGING_PATH_MARKERS = ("歌唱", "唱歌", "singing", "song", "vocal")
 LOGGER = logging.getLogger("atri.webui")
 
 # WebUI 是本地运维面板，不承载对话主循环。API 管理配置、记忆、日志和音频资源；
@@ -195,14 +181,34 @@ def _music_bridge_request(
     return result
 
 
-from .server_parts.voice_integrations import (
-    _TRANSLATION_LANGUAGES,
-    _detect_translation_source,
-    _extract_translation,
-    _voice_preview_synthesis_options,
-    _voice_preview_synthesis_options_for_mode,
-    translate_voice_text,
-)
+def singing_reference_payload() -> list[dict[str, str]]:
+    """扫描本机歌声参考目录，为歌曲工程提供参考音源列表。"""
+
+    references: list[dict[str, str]] = []
+    if not SINGING_REFERENCE_ROOT.is_dir():
+        return references
+    for path in sorted(SINGING_REFERENCE_ROOT.rglob("*"), key=lambda item: str(item).casefold()):
+        if not path.is_file() or path.suffix.lower() not in AUDIO_EXTENSIONS:
+            continue
+        try:
+            relative = path.resolve().relative_to(SINGING_REFERENCE_ROOT)
+        except (OSError, ValueError):
+            continue
+        if not any(
+            marker in part.casefold()
+            for part in relative.parts
+            for marker in SINGING_PATH_MARKERS
+        ):
+            continue
+        resolved = path.resolve()
+        references.append(
+            {
+                "name": path.stem,
+                "path": str(resolved),
+                "relative_path": str(relative),
+            }
+        )
+    return references
 
 
 class WebUIState:
@@ -302,8 +308,6 @@ class WebUIState:
             self.server.tools.ocr_enabled = bool(
                 new_config.toolbox_ocr_enabled
             )
-            if hasattr(self.server, "voice"):
-                self.server.voice.update_config(new_config)
             if hasattr(self.server, "proactive_planner"):
                 self.server.proactive_planner.update_owner_qqs(new_config.owner_qqs)
             # 模型页面切换聊天模型后，评测旁路立即复用同一模型；不再维护第二套
@@ -365,7 +369,6 @@ from .server_parts.handler_music import HandlerMusicMixin
 from .server_parts.handler_qzone import HandlerQZoneMixin
 from .server_parts.handler_response import HandlerResponseMixin
 from .server_parts.handler_stickers_memory import HandlerStickersMemoryMixin
-from .server_parts.handler_voice import HandlerVoiceMixin
 
 
 class AtriWebUIHandler(
@@ -373,7 +376,6 @@ class AtriWebUIHandler(
     HandlerConfigMixin,
     HandlerMusicMixin,
     HandlerInsightsMixin,
-    HandlerVoiceMixin,
     HandlerStickersMemoryMixin,
     HandlerQZoneMixin,
     HandlerResponseMixin,
@@ -402,18 +404,6 @@ def _valid_music_stage(value: str) -> str:
     if stage not in {"separation", "inference", "mix"}:
         raise ValueError("歌曲处理阶段无效")
     return stage
-
-
-def _singing_audio_path(value: Any, label: str) -> Path:
-    raw_path = str(value or "").strip()
-    if not raw_path:
-        raise ValueError(f"{label}不能为空")
-    path = Path(raw_path).expanduser().resolve()
-    if not path.is_file():
-        raise ValueError(f"{label}不存在：{path}")
-    if path.suffix.lower() not in AUDIO_EXTENSIONS:
-        raise ValueError(f"{label}格式不受支持：{path.suffix}")
-    return path
 
 
 def run_coro(coro: Any) -> Any:
@@ -544,7 +534,6 @@ async def generate_qzone_text(config: BotConfig, prompt: str, kind: str, profile
         instruction,
         "主人",
         extra_system=system,
-        allow_reply_voice=False,
     )
     reply = engine._finalize_reply("webui:qzone:generate", instruction, reply, strict_quality=False).strip()
     limit = 1000 if kind == "post" else 200

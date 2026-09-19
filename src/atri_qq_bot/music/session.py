@@ -343,3 +343,40 @@ def _is_generic_song_fragment(fragment: str) -> bool:
 def _catalog_reply(songs: list[DeliverySong]) -> str:
     names = "、".join(f"《{song.title}》" for song in songs)
     return f"我现在会唱这些：{names}。你直接说歌名、序号，或者让我随便挑一首都可以。"
+
+
+# —— 显式交付意图检测（自 voice 模块迁入，点歌入口依赖） ——
+
+_NEGATED_DELIVERY_PATTERNS = (
+    re.compile(r"(?:不要|不用|别|无需|不必).{0,4}(?:语音|声音|朗读|念)"),
+    re.compile(r"(?:不要|不用|别|无需|不必).{0,1}唱"),
+    re.compile(r"(?:语音|声音).{0,3}(?:关掉|关闭|停用)"),
+)
+_SINGING_PATTERNS = (
+    re.compile(r"(?:给我|为我|帮我|可以|能不能|能|请)?唱(?:一首|首|一段|段|两句|几句|歌)?"),
+    re.compile(r"(?:来|整)(?:一首|首|一段|段|两句|几句)(?:歌)?"),
+)
+_SPEECH_PATTERNS = (
+    re.compile(r"(?:用|发|改成|换成).{0,4}语音(?:回复|回答|说|回|消息)?"),
+    re.compile(r"语音(?:回复|回答|说|回|发|消息)"),
+    re.compile(r"(?:读|念)(?:一遍|一下|出来|给我听|给.*听)"),
+    re.compile(r"(?:说|讲)给我听"),
+    re.compile(r"(?:不要|别)打字.{0,6}(?:说|回复|回答)"),
+)
+
+
+@dataclass(frozen=True)
+class ExplicitDeliveryIntent:
+    mode: str
+    reason: str = "explicit_request"
+
+
+def detect_explicit_delivery_intent(text: str) -> ExplicitDeliveryIntent | None:
+    value = re.sub(r"\s+", "", str(text or "")).strip()
+    if not value or any(pattern.search(value) for pattern in _NEGATED_DELIVERY_PATTERNS):
+        return None
+    if any(pattern.search(value) for pattern in _SINGING_PATTERNS):
+        return ExplicitDeliveryIntent("singing")
+    if any(pattern.search(value) for pattern in _SPEECH_PATTERNS):
+        return ExplicitDeliveryIntent("speech")
+    return None

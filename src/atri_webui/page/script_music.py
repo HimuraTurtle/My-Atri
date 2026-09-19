@@ -381,7 +381,7 @@ function renderMusicProject(project) {
   setMusicAudio('musicConvertedAudio','musicConvertedWave',musicArtifactUrl(project,'converted'));
   setMusicAudio('musicMixAudio','musicMixWave',musicArtifactUrl(project,'mix'));
   clearTimeout(window._musicProjectTimer);
-  if(busy && window._voiceMusicActive) window._musicProjectTimer = setTimeout(()=>loadMusicProject(project.id), 2500);
+  if(busy) window._musicProjectTimer = setTimeout(()=>loadMusicProject(project.id), 2500);
 }
 async function loadMusicProjects() {
   if(window._musicProjectsPromise) return window._musicProjectsPromise;
@@ -562,7 +562,7 @@ async function rerunMusicSegment() {
   } catch(error) { toast('局部重跑失败：'+error.message); button.disabled=false; }
 }
 async function exportMusicProject() {
-  const project=window._musicProject; if(!project) return;
+  const project = window._musicProject; if(!project) return;
   const button=$('musicExportButton'); button.disabled=true;
   try {
     const data=await api('/api/music/project/export',{method:'POST',body:JSON.stringify({
@@ -572,5 +572,5 @@ async function exportMusicProject() {
     renderMusicProject(data.project);
   } catch(error) { toast('导出失败：'+error.message); button.disabled=false; }
 }
-function singingStateText(state) {
+async function loadStatus() {
 """

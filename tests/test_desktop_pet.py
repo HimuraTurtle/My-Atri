@@ -704,18 +704,8 @@ def test_hidden_launcher_starts_chat_core_before_optional_services(monkeypatch) 
     )
     monkeypatch.setattr(
         hidden_launcher,
-        "start_gpt_sovits_if_needed",
-        lambda: events.append("gpt-sovits"),
-    )
-    monkeypatch.setattr(
-        hidden_launcher,
         "start_ollama_if_needed",
         lambda *, wait_for_ready: events.append(("ollama", wait_for_ready)),
-    )
-    monkeypatch.setattr(
-        hidden_launcher,
-        "start_voice_if_needed",
-        lambda *, wait_for_ready: events.append(("voice", wait_for_ready)),
     )
 
     assert hidden_launcher.main() == 0
@@ -801,27 +791,6 @@ def test_hidden_launcher_isolates_optional_service_failures(monkeypatch) -> None
     assert hidden_launcher.main("optional") == 0
     assert "maibot" in events
     assert any("qzone failed" in event for event in events)
-
-
-def test_hidden_launcher_starts_voice_only_on_demand(monkeypatch) -> None:
-    from tools.launch.qq_legacy import hidden_launcher
-
-    events: list[object] = []
-    monkeypatch.setattr(hidden_launcher, "acquire_single_instance_mutex", lambda name: True)
-    monkeypatch.setattr(hidden_launcher, "log", lambda message: None)
-    monkeypatch.setattr(
-        hidden_launcher,
-        "start_gpt_sovits_if_needed",
-        lambda: events.append("gpt-sovits"),
-    )
-    monkeypatch.setattr(
-        hidden_launcher,
-        "start_voice_if_needed",
-        lambda *, wait_for_ready: events.append(("voice", wait_for_ready)),
-    )
-
-    assert hidden_launcher.main("voice-tts") == 0
-    assert events == [("voice", True)]
 
 
 def test_hidden_launcher_preflights_napcat_before_stopping_qq(monkeypatch) -> None:
@@ -1242,45 +1211,6 @@ def test_hidden_launcher_reports_atri_process_launch_failure(monkeypatch) -> Non
     assert any("launch denied" in message for message in messages)
 
 
-def test_hidden_launcher_loads_no_window_compat_for_voice_service(
-    tmp_path: Path,
-    monkeypatch,
-) -> None:
-    from tools.launch.qq_legacy import hidden_launcher
-
-    runtime_root = tmp_path / "voice-runtime"
-    pythonw = runtime_root / ".venv" / "Scripts" / "pythonw.exe"
-    pythonw.parent.mkdir(parents=True)
-    pythonw.write_bytes(b"")
-    launches: list[dict[str, object]] = []
-
-    monkeypatch.setattr(hidden_launcher, "voice_enabled", lambda: True)
-    monkeypatch.setattr(hidden_launcher, "port_open", lambda port: False)
-    monkeypatch.setattr(
-        hidden_launcher,
-        "voice_runtime_candidates",
-        lambda: (runtime_root,),
-    )
-    monkeypatch.setattr(
-        hidden_launcher,
-        "voice_models_root",
-        lambda: tmp_path / "models",
-    )
-    monkeypatch.setattr(
-        hidden_launcher,
-        "popen_hidden",
-        lambda args, **kwargs: launches.append({"args": args, **kwargs}),
-    )
-    monkeypatch.setattr(hidden_launcher, "log", lambda message: None)
-
-    hidden_launcher.start_voice_if_needed(wait_for_ready=False)
-
-    assert len(launches) == 1
-    environment = launches[0]["env"]
-    compat_path = str(hidden_launcher.PROJECT_DIR / "tools" / "voice" / "compat")
-    assert compat_path in environment["PYTHONPATH"].split(os.pathsep)
-
-
 def test_hidden_launcher_hides_qq_while_waiting_for_quick_login(
     monkeypatch,
 ) -> None:
@@ -1351,17 +1281,6 @@ def test_legacy_launchers_delegate_to_single_core_launcher() -> None:
     assert "-c \"import atri_qq_bot" not in atri_batch
 
     assert not (project_root / "tools" / "launch" / "atri" / "run.ps1").exists()
-
-
-def test_gpt_sovits_stop_does_not_use_unbounded_wmi_scan() -> None:
-    project_root = Path(__file__).resolve().parents[1]
-    stop_script = (
-        project_root / "tools" / "voice" / "stop-gpt-sovits.ps1"
-    ).read_text(encoding="utf-8")
-
-    assert "Get-CimInstance Win32_Process" not in stop_script
-    assert "netstat.exe -ano -p TCP" in stop_script
-    assert "gpt-sovits.pid" in stop_script
 
 
 def test_hidden_launcher_uses_no_console_process_flags(monkeypatch) -> None:

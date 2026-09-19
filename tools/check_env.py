@@ -24,7 +24,7 @@ CORE_MODULES = {
     "rapidocr": "OCR 识别",
     "onnxruntime": "本地 OCR 推理",
 }
-PORTS = {8765: "ATRI OneBot", 8787: "项目 WebUI", 8790: "语音服务", 6099: "NapCat WebUI", 11434: "Ollama"}
+PORTS = {8765: "ATRI OneBot", 8787: "项目 WebUI", 8793: "AI_music 桥接", 6099: "NapCat WebUI", 11434: "Ollama"}
 
 
 def main() -> int:

@@ -11,15 +11,6 @@ class HandlerCoreMixin(WebUIHandlerMixin):
         parsed = urlparse(self.path)
         if parsed.path == "/":
             return self._send_html(_render_index_dynamic())
-        if parsed.path == "/voice-call":
-            token = parse_qs(parsed.query).get("token", [""])[0]
-            session = self.webui_state.server.voice_calls.get(token)
-            if session is None:
-                return self._send_html(
-                    "<!doctype html><meta charset='utf-8'><title>邀请无效</title>"
-                    "<p style='font:16px sans-serif;padding:32px'>通话邀请已失效或已结束。</p>"
-                )
-            return self._send_html(render_voice_call(token, session.topic))
         if parsed.path == "/api/status":
             return self._send_json(self._status())
         if parsed.path == "/api/developer":
@@ -60,14 +51,8 @@ class HandlerCoreMixin(WebUIHandlerMixin):
             return self._send_json(local_models_payload())
         if parsed.path == "/api/minecraft":
             return self._send_json(minecraft_dashboard())
-        if parsed.path == "/api/voice":
-            return self._send_json(self._voice_payload())
-        if parsed.path == "/api/voice/behavior":
-            return self._send_json({"ok": True, "behavior": load_voice_behavior()})
-        if parsed.path == "/api/voice/singing/jobs":
-            return self._handle_singing_jobs()
-        if parsed.path == "/api/voice/singing/job":
-            return self._handle_singing_job(parsed.query)
+        if parsed.path == "/api/music/overview":
+            return self._send_json(self._music_overview_payload())
         if parsed.path == "/api/music/projects":
             return self._handle_music_projects()
         if parsed.path == "/api/music/capabilities":
@@ -86,8 +71,6 @@ class HandlerCoreMixin(WebUIHandlerMixin):
             return self._send_json(self._delivery_songs_payload())
         if parsed.path == "/api/music/delivery-audio":
             return self._send_delivery_song_audio(parsed.query)
-        if parsed.path == "/api/voice/audio":
-            return self._send_voice_audio(parsed.query)
         if parsed.path == "/api/stickers":
             return self._send_json(sticker_summary())
         if parsed.path == "/api/stickers/file":
@@ -156,26 +139,10 @@ class HandlerCoreMixin(WebUIHandlerMixin):
             return self._handle_summary_generate()
         if parsed.path == "/api/group-summaries/schedules":
             return self._handle_summary_schedule_save()
-        if parsed.path == "/api/voice/translate":
-            return self._handle_voice_translate()
         if parsed.path == "/api/minecraft/config":
             return self._handle_minecraft_config()
         if parsed.path == "/api/minecraft/command":
             return self._handle_minecraft_command()
-        if parsed.path == "/api/voice/save":
-            return self._handle_voice_save()
-        if parsed.path == "/api/voice/reference":
-            return self._handle_voice_reference()
-        if parsed.path == "/api/voice/preview":
-            return self._handle_voice_preview()
-        if parsed.path == "/api/voice/test-asr":
-            return self._handle_voice_test_asr()
-        if parsed.path == "/api/voice/singing/source":
-            return self._handle_singing_source_upload()
-        if parsed.path == "/api/voice/singing/create":
-            return self._handle_singing_create()
-        if parsed.path == "/api/voice/singing/cancel":
-            return self._handle_singing_cancel()
         if parsed.path == "/api/music/project/create":
             return self._handle_music_project_create()
         if parsed.path == "/api/music/project/stems":
@@ -200,12 +167,8 @@ class HandlerCoreMixin(WebUIHandlerMixin):
             return self._handle_delivery_music_source_upload()
         if parsed.path == "/api/music/delivery-segment":
             return self._handle_delivery_music_segment()
-        if parsed.path == "/api/voice-call/turn":
-            return self._handle_voice_call_turn()
-        if parsed.path == "/api/voice-call/close":
-            return self._handle_voice_call_close()
-        if parsed.path == "/api/voice-call/test-invite":
-            return self._handle_voice_call_test_invite()
+        if parsed.path == "/api/music/source":
+            return self._handle_music_source_upload()
         if parsed.path == "/api/restart":
             return self._send_json(restart_background_services())
         if parsed.path == "/api/stickers/category":

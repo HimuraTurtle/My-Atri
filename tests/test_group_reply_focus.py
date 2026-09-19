@@ -184,7 +184,6 @@ def test_group_prompt_marks_same_sender_focus_as_mandatory(monkeypatch, tmp_path
             profile={},
             context_profile={},
             reply_focus=focus,
-            allow_reply_voice=False,
         )
     )
 
@@ -208,7 +207,6 @@ def test_server_routes_previous_share_and_focus_to_same_reply(monkeypatch, tmp_p
         temperature=0.4,
         max_tokens=350,
         memory_path=tmp_path / "memory.json",
-        voice_tts_enabled=False,
     )
     engine = AtriReplyEngine(config)
     server = OneBotServer(config, engine)

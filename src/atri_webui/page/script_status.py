@@ -9,7 +9,6 @@ PART = r"""  const s = await api('/api/status');
       Boolean(s.ollama || s.ollama_on_demand),
       s.ollama ? '运行中' : (s.ollama_on_demand ? '按需可用 · 当前空闲' : '不可用')
     ],
-    ['语音服务', s.voice, s.voice ? '正常' : '未连接'],
     ['WebUI', s.webui, s.webui ? '正常' : '未连接'],
     ['聊天模型', Boolean(s.model), s.model || '未配置'],
     [

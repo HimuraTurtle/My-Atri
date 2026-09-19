@@ -271,12 +271,6 @@ def _log_tool_event(
 
 
 def _safe_log_arguments(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if name == "speak_as_atri":
-        return {
-            key: value
-            for key, value in arguments.items()
-            if key in {"emotion", "intensity", "language", "reason", "mode"}
-        }
     return {key: str(value)[:160] for key, value in arguments.items()}
 
 

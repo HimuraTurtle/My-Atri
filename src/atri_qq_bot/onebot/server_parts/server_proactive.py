@@ -129,20 +129,7 @@ class OneBotProactiveMixin(OneBotServerMixin):
                     policy,
                 )
                 text = str(result.get("text") or "").strip()
-                voice_request = self.reply_engine.consume_voice_request(plan.conversation_id)
-                permission_event = {
-                    "message_type": message_type,
-                    "user_id": user_id,
-                    "group_id": group_id,
-                }
-                if voice_request is not None and not is_event_modality_allowed(
-                    permission_event,
-                    "voice",
-                ):
-                    # 主动消息仍可发送文本，不让未授权目标触发 TTS。
-                    text = text or str(voice_request.text or "").strip()
-                    voice_request = None
-                if not text and voice_request is None:
+                if not text:
                     if result.get("error"):
                         LOGGER.warning(
                             "主动 V2 跳过 %s：%s",
@@ -153,19 +140,6 @@ class OneBotProactiveMixin(OneBotServerMixin):
                 try:
                     message: str | list[dict[str, Any]] = text
                     sent_text = text
-                    if voice_request is not None:
-                        sent_text = voice_request.text
-                        try:
-                            synthesis = await self.voice.synthesize(
-                                plan.conversation_id,
-                                voice_request,
-                            )
-                            message = outgoing_to_onebot_message(
-                                OutgoingMessage("record", str(synthesis.audio_path))
-                            )
-                        except Exception as exc:
-                            LOGGER.warning("主动语音合成失败回退文本：%s", exc)
-                            message = voice_request.text
                     if message_type == "group":
                         await self.call_action(
                             websocket,
@@ -321,7 +295,6 @@ class OneBotProactiveMixin(OneBotServerMixin):
         event: dict[str, Any],
         status: str,
         *,
-        request: Any | None = None,
         message: OutgoingMessage | None = None,
         result: Any | None = None,
         error: Any = "",
@@ -332,9 +305,6 @@ class OneBotProactiveMixin(OneBotServerMixin):
         if os.getenv("PYTEST_CURRENT_TEST"):
             return
         with contextlib.suppress(Exception):
-            quality = getattr(result, "quality", None)
-            if not isinstance(quality, dict):
-                quality = getattr(error, "quality", None)
             error_text = str(error or "").strip()
             if not error_text and isinstance(error, BaseException):
                 error_text = f"{type(error).__name__}: {error!r}"
@@ -344,10 +314,7 @@ class OneBotProactiveMixin(OneBotServerMixin):
                 "message_type": event.get("message_type"),
                 "group_id": event.get("group_id"),
                 "user_id": event.get("user_id"),
-                "mode": getattr(request, "mode", ""),
-                "text": str(getattr(request, "text", "") or "")[:200],
                 "source": str(getattr(result, "source", "") or ""),
-                "quality": quality if isinstance(quality, dict) else None,
                 "file": str(
                     getattr(result, "audio_path", "")
                     or (message.content if message is not None else "")

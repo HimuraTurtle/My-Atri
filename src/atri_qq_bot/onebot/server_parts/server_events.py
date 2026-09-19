@@ -46,25 +46,6 @@ class OneBotEventMixin(OneBotServerMixin):
                 plain_text,
             )
             preliminary_reply = preliminary_reply or active_group_continuation
-        voice_transcript = None
-        voice_error: Exception | None = None
-        if is_message and (event.get("message_type") == "private" or preliminary_reply):
-            try:
-                voice_transcript = await self.voice.transcribe_event(
-                    event,
-                    lambda action, params: self.call_action_and_wait(
-                        websocket,
-                        action,
-                        params,
-                        self.config.voice_service_timeout_seconds,
-                    ),
-                )
-            except Exception as exc:
-                voice_error = exc
-                print(f"[onebot] Voice transcription skipped: {exc}")
-        if voice_transcript is not None:
-            plain_text = voice_transcript.text
-
         if is_message:
             with contextlib.suppress(Exception):
                 await self.stickers.capture_from_event(
@@ -187,7 +168,7 @@ class OneBotEventMixin(OneBotServerMixin):
             force=bool(explicit_delivery and explicit_delivery.mode == "singing"),
         )
         if singing_decision.handled and not is_event_modality_allowed(event, "voice"):
-            # 点歌属于语音模型能力；未授权时回到普通文本回复，不读取或发送音频。
+            # 点歌发送的是音频消息；未授权时回到普通文本回复，不读取或发送音频。
             LOGGER.info("语音白名单拒绝点歌：user=%s group=%s", event.get("user_id"), event.get("group_id"))
             singing_decision = replace(singing_decision, handled=False)
         if singing_decision.handled:
@@ -278,23 +259,6 @@ class OneBotEventMixin(OneBotServerMixin):
                 quoted_segments,
             )
         model_input_text = _compose_model_input(plain_text, quoted_text)
-        voice_only_text = plain_text.replace("@群友", "").strip()
-        if (
-            voice_error is not None
-            and find_record_segments(event.get("message"))
-            and voice_only_text == "[语音]"
-        ):
-            self._record_reply_failure(
-                event,
-                turn_id=turn_id,
-                conversation_id=conversation_id,
-                user_text=model_input_text,
-                model_reply="",
-                reason=f"语音识别失败：{voice_error}",
-                model_type="voice",
-                model_name=self._delivery_model_name("voice"),
-            )
-            return
 
         has_current_visual = _event_has_visual_material(analysis_event)
         if has_current_visual:
@@ -345,12 +309,6 @@ class OneBotEventMixin(OneBotServerMixin):
                     key=lambda key: self._recent_visual_contexts[key][0],
                 )
                 self._recent_visual_contexts.pop(oldest, None)
-        if voice_transcript is not None:
-            tool_context = VoicePromptContext(
-                voice_transcript,
-                material_context=tool_context,
-                prefer_voice_reply=bool(self.config.voice_reply_to_voice),
-            )
 
         if self.cognition_shadow is not None:
             request = ConversationTurnRequest(
@@ -417,163 +375,29 @@ class OneBotEventMixin(OneBotServerMixin):
                     voice_mode="",
                 )
             return
-        voice_request = self.reply_engine.consume_voice_request(conversation_id)
-        consume_reply_voice_choice = getattr(
-            self.reply_engine,
-            "consume_reply_voice_choice",
-            None,
+        profile = self.reply_engine.profile_for(profile_id)
+        outgoing = build_outgoing_messages(
+            reply_text,
+            plain_text,
+            self.stickers,
+            self.config,
+            profile,
         )
-        autonomous_voice_selected = bool(
-            consume_reply_voice_choice(conversation_id)
-            if callable(consume_reply_voice_choice)
-            else False
-        )
-        if voice_request is not None:
-            voice_request = stabilize_explicit_voice_request(
-                plain_text,
-                voice_request,
-                max_chars=int(self.config.voice_max_chars),
-            )
-            voice_request = sanitize_voice_request(
-                voice_request,
-                max_chars=int(self.config.voice_max_chars),
-            )
-            if voice_request.mode == "speech" and not voice_request.text:
-                # 只有动作/思考、没有可朗读正文时，宁可回普通文本也不把空内容送进 TTS。
-                voice_request = None
-        if voice_request is None and bool(self.config.voice_tts_enabled):
-            policy = load_voice_behavior()
-            profile = self.reply_engine.profile_for(profile_id)
-            guarded_request = build_explicit_voice_fallback(
-                plain_text,
-                reply_text,
-                max_chars=int(self.config.voice_max_chars),
-            )
-            if (
-                guarded_request is not None
-                and bool(policy.get("explicit_delivery_guard_enabled", True))
-                and (
-                    event.get("message_type") != "group"
-                    or bool(self.config.voice_group_enabled)
-                )
-                and evaluate_voice_request(
-                    conversation_id,
-                    profile,
-                    guarded_request.reason,
-                    policy,
-                ).allowed
-            ):
-                voice_request = guarded_request
-            if voice_request is None and autonomous_voice_selected:
-                autonomous_request = build_autonomous_voice_fallback(
-                    plain_text,
-                    reply_text,
-                    max_chars=int(self.config.voice_max_chars),
-                    reason="voice_reply" if voice_transcript is not None else "autonomous",
-                )
-                if (
-                    autonomous_request is not None
-                    and (
-                        event.get("message_type") != "group"
-                        or bool(self.config.voice_group_enabled)
-                    )
-                    and evaluate_voice_request(
-                        conversation_id,
-                        profile,
-                        autonomous_request.reason,
-                        policy,
-                    ).allowed
-                ):
-                    voice_request = autonomous_request
-        if voice_request is not None and not is_event_modality_allowed(event, "voice"):
-            # 保留本轮文字回复，但不进入 TTS，避免未授权用户消耗语音服务资源。
-            LOGGER.info("语音白名单拒绝 TTS：user=%s group=%s", event.get("user_id"), event.get("group_id"))
-            voice_request = None
-        consume_call = getattr(self.reply_engine, "consume_call_request", None)
-        call_request = consume_call(conversation_id) if callable(consume_call) else None
-        if call_request is not None and not is_event_modality_allowed(event, "voice"):
-            LOGGER.info("语音白名单拒绝通话邀请：user=%s group=%s", event.get("user_id"), event.get("group_id"))
-            call_request = None
-        spoken_text = ""
-        voice_streamed = False
-        delivered_text = ""
-        if call_request is not None:
-            policy = load_voice_behavior()
-            session = self.voice_calls.create(
-                conversation_id,
-                call_request.topic,
-                int(policy["call_expiry_minutes"]),
-                int(policy["call_max_minutes"]),
-            )
-            call_url = f"{str(policy['call_base_url']).rstrip('/')}/voice-call?token={session.token}"
-            topic_text = f"想继续聊聊“{call_request.topic}”。" if call_request.topic else "想和你继续说说话。"
-            outgoing = [
-                OutgoingMessage(
-                    "text",
-                    f"{topic_text}点这里接通语音：{call_url}\n邀请 {policy['call_expiry_minutes']} 分钟内有效。",
-                )
-            ]
-        elif voice_request is not None:
-            spoken_text = voice_request.text
-            if voice_request.mode == "speech":
-                delivered_text = await self._send_streamed_speech_reply(
-                    websocket,
-                    event,
-                    conversation_id,
-                    voice_request,
-                )
-                outgoing = []
-                voice_streamed = True
-            else:
-                # 少见的自然语言若由模型识别为唱歌，也回到同一控制器裁决；
-                # 模型只能提供候选歌名和段落，不能直接决定发送文件。
-                singing_decision = self.singing.resolve(
-                    singing_context_id,
-                    plain_text,
-                    model_song_title=getattr(voice_request, "song_title", ""),
-                    model_segment_index=getattr(voice_request, "segment_index", None),
-                    model_segment_hint=getattr(voice_request, "segment_hint", ""),
-                    force=True,
-                )
-                singing_decision = await self._maybe_online_singing(
-                    singing_decision,
-                    plain_text,
-                    model_song_title=getattr(voice_request, "song_title", ""),
-                )
-                outgoing, spoken_text = self._singing_outgoing(
-                    event,
-                    plain_text,
-                    singing_decision,
-                    request=voice_request,
-                )
-        else:
-            profile = self.reply_engine.profile_for(profile_id)
-            outgoing = build_outgoing_messages(
-                reply_text,
-                plain_text,
-                self.stickers,
-                self.config,
-                profile,
-            )
         delivery_model_type = (
-            "voice"
-            if voice_transcript is not None or voice_request is not None or voice_streamed
-            else "vision"
+            "vision"
             if has_current_visual or getattr(tool_context, "visual_data", None)
             else "chat"
         )
         delivery_model_name = self._delivery_model_name(delivery_model_type)
         sent_sticker = any(message.kind in {"image", "sticker", "face"} for message in outgoing)
-        if not voice_streamed:
-            delivered_text = await self.send_reply(
-                websocket,
-                event,
-                outgoing,
-                fallback_text=spoken_text or None,
-                model_type=delivery_model_type,
-                model_name=delivery_model_name,
-            )
-        if (voice_streamed or outgoing) and not delivered_text:
+        delivered_text = await self.send_reply(
+            websocket,
+            event,
+            outgoing,
+            model_type=delivery_model_type,
+            model_name=delivery_model_name,
+        )
+        if outgoing and not delivered_text:
             self._record_reply_failure(
                 event,
                 turn_id=turn_id,
@@ -592,7 +416,7 @@ class OneBotEventMixin(OneBotServerMixin):
                     turn_id,
                     reply_text=reply_text,
                     delivered_text="",
-                    voice_mode=getattr(voice_request, "mode", "") if voice_request else "",
+                    voice_mode="",
                 )
             return
         self._mark_smart_group_reply(event, conversation_id, plain_text)
@@ -602,7 +426,7 @@ class OneBotEventMixin(OneBotServerMixin):
                 turn_id,
                 reply_text=reply_text,
                 delivered_text=recorded_reply,
-                voice_mode=getattr(voice_request, "mode", "") if voice_request else "",
+                voice_mode="",
             )
         self.reply_engine.record_bot_reply(
             conversation_id,
@@ -616,7 +440,7 @@ class OneBotEventMixin(OneBotServerMixin):
             user_text=plain_text,
             model_reply=reply_text,
             delivered_reply=recorded_reply,
-            voice_mode=getattr(voice_request, "mode", "") if voice_request else "",
+            voice_mode="",
             material_read_level=str(getattr(tool_context, "read_level", "") or ""),
             reply_focus_source=str(getattr(group_reply_focus, "source", "") or ""),
             reply_focus_text=str(getattr(group_reply_focus, "focus_text", "") or ""),
