@@ -81,6 +81,11 @@ class ToolboxDocumentsMixin(ToolboxMixin):
             limitations.append("没有识别到 BV 号，只能基于页面标题/简介判断。")
         limitations.append("目前不会自动下载视频画面；能读到公开标题、简介、分区、统计和公开字幕时才会分析。")
         read_level = "partial_content" if any("公开字幕摘要" in item for item in findings) else "metadata_only"
+        if read_level == "metadata_only":
+            findings.append(
+                "该消息包含 B站视频链接，这里只解析到标题/简介等元数据；"
+                "要了解或讨论视频实际内容时，请调用 bilibili_read 工具获取字幕/转写素材。"
+            )
         return ToolAnalysisResult(
             category="日常生活乐趣",
             style="抽象有趣",

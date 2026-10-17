@@ -54,6 +54,10 @@ class OneBotEventMixin(OneBotServerMixin):
                     self.config.sticker_capture_enabled,
                     self.config.sticker_capture_max_bytes,
                 )
+            with contextlib.suppress(Exception):
+                # 表情包小偷：门控+入队是同步快操作，下载与 VLM 分类在
+                # 后台 worker 中进行，不会拖慢回复链路。
+                self._maybe_steal_stickers(event, plain_text)
 
         should_send_reply = preliminary_reply
         conversation_id = _conversation_id(event)
@@ -128,6 +132,9 @@ class OneBotEventMixin(OneBotServerMixin):
                     addressed_to_bot=addressed_to_bot,
                     is_owner=is_owner,
                 )
+                # Who Is Who：每条群消息归一化入库（身份/称呼/话题），
+                # 不要求被 @，为后续轮次积累共享上下文。
+                self._record_who_is_who_message(event, plain_text)
             else:
                 self.reply_engine.observe_incoming(
                     conversation_id,
@@ -145,6 +152,20 @@ class OneBotEventMixin(OneBotServerMixin):
         ):
             return
 
+        # Who Is Who 指令（/wiw ...）：确定性命令，与 B站自动总结一样在
+        # 回复门控之前拦截——指令不要求被 @，不经过聊天模型。
+        if is_message and await self._maybe_handle_who_is_who_command(
+            websocket, event, plain_text, conversation_id
+        ):
+            return
+
+        # 「是啊，吃什么」接梗（移植自 astrbot_plugin_what_to_eat）同样在
+        # 回复门控之前：原插件监听群聊全部消息，接梗不要求被 @。
+        if is_message and await self._maybe_handle_what_to_eat(
+            websocket, event, plain_text, conversation_id
+        ):
+            return
+
         if not should_send_reply:
             return
 
@@ -155,6 +176,10 @@ class OneBotEventMixin(OneBotServerMixin):
 
         # B站总结/解析命令（B站总结 <链接>）与漫画命令同级的确定性入口。
         if await self._maybe_handle_bilibili_command(websocket, event, plain_text, conversation_id):
+            return
+
+        # 头像识别（移植自 astrbot_plugin_shitu）：识别目标 QQ 头像里的二次元角色。
+        if await self._maybe_handle_avatar_command(websocket, event, plain_text, conversation_id):
             return
 
         # 常见点歌表达在聊天模型之前处理。它们只读取完整音乐目录中的成品，
@@ -331,6 +356,10 @@ class OneBotEventMixin(OneBotServerMixin):
                 profile=profile_snapshot,
             )
 
+        # Who Is Who 共享上下文：门控与确定性命令都通过后才构建（相关消息
+        # + 成员身份 + 状态账本），作为本轮 system 提示注入；构建失败返回
+        # None，照常回复。
+        prepared_who_is_who = self._prepare_who_is_who_turn(event)
         try:
             reply_text = await self.reply_engine.reply(
                 conversation_id,
@@ -340,6 +369,9 @@ class OneBotEventMixin(OneBotServerMixin):
                 observed=True,
                 tool_context=tool_context,
                 reply_focus=group_reply_focus,
+                context_system=(
+                    prepared_who_is_who.context_text if prepared_who_is_who else None
+                ),
             )
         except Exception as exc:
             LOGGER.exception("回复引擎异常：conversation=%s", conversation_id)
@@ -434,6 +466,9 @@ class OneBotEventMixin(OneBotServerMixin):
             sent_sticker,
             profile_id=profile_id,
         )
+        # Who Is Who：AI 回复落地后记录 bot 消息，并按回复内容裁决
+        # pending 请求是形成承诺还是拒绝。
+        self._finish_who_is_who_turn(event, recorded_reply, prepared_who_is_who)
         self._log_reply_event(
             event,
             conversation_id=conversation_id,
@@ -447,6 +482,8 @@ class OneBotEventMixin(OneBotServerMixin):
             quoted_message_id=quoted_message_id,
         )
         await self._deliver_pending_manga(websocket, event, conversation_id)
+        await self._deliver_pending_anima(websocket, event, conversation_id)
+        await self._deliver_pending_minimax_draw(websocket, event, conversation_id)
         if self.insights is not None:
             # submit 只创建一个后台持久化任务；SQLite、向量模型和 DeepSeek
             # 都在独立 worker 中执行，不延长本轮 QQ 回复耗时。

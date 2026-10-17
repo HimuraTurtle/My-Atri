@@ -219,7 +219,14 @@ class WebUIState:
         self.group_name_lock = asyncio.Lock()
         self._group_name_refresh_at = 0.0
         self.memory_admin = memory_admin_for_config(config)
-        database = Path(os.getenv("QZONE_AUTOMATION_DB", "data/qzone_automation.sqlite3"))
+        configured_database = Path(
+            os.getenv("QZONE_AUTOMATION_DB", "data/qzone_automation.sqlite3")
+        )
+        database = (
+            configured_database
+            if configured_database.is_absolute()
+            else PROJECT_ROOT / configured_database
+        )
         self.qzone_automation = QZoneAutomation(
             QZoneAutomationStore(database),
             lambda: QZoneAdmin(

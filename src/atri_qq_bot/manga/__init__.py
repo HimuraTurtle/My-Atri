@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from ..bilibili.parsing import strip_address_prefix
 from ..message_plan import OutgoingMessage
 from .client import SuwayomiClient, SuwayomiError
 from .downloader import fetch_pages_local, schedule_cleanup
@@ -301,7 +302,9 @@ class MangaService:
 
     @staticmethod
     def is_command(text: str) -> bool:
-        tokens = str(text or "").strip().split()
+        # 群友习惯在命令前带称呼（"atri，漫画 搜索 xxx"、@机器人 漫画 帮助），
+        # 先剥离再分词匹配，避免命令漏拦后落入聊天模型（与 B站命令同一容错层）。
+        tokens = strip_address_prefix(text).split()
         if len(tokens) < 2:
             return False
         if tokens[0] not in _COMMAND_PREFIXES:
@@ -312,9 +315,9 @@ class MangaService:
         }
 
     async def handle_command(self, text: str, conversation_id: str) -> MangaCommandResult:
-        tokens = text.strip().split()
+        raw = strip_address_prefix(text).strip()
+        tokens = raw.split()
         sub = tokens[1]
-        raw = text.strip()
         handler = {
             "帮助": self._cmd_help,
             "源": self._cmd_sources,

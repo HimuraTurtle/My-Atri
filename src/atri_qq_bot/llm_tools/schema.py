@@ -30,6 +30,16 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
         getattr(config, "manga_ai_tools_enabled", True)
     ):
         tools.extend(_manga_tool_schemas(config))
+    if bool(getattr(config, "bilibili_enabled", True)) and bool(
+        getattr(config, "bilibili_ai_tool_enabled", True)
+    ):
+        tools.append(_bilibili_read_schema())
+    if bool(getattr(config, "anima_enabled", False)):
+        tools.extend(_anima_tool_schemas())
+    if bool(getattr(config, "minimax_draw_enabled", False)):
+        tools.extend(_minimax_draw_tool_schemas())
+    if bool(getattr(config, "isittrue_enabled", False)):
+        tools.append(_fact_check_schema())
     if bool(getattr(config, "web_search_enabled", True)):
         tools.append(_weather_schema())
         tools.append(_web_search_schema(config))
@@ -260,6 +270,209 @@ def _manga_tool_schemas(config: Any) -> list[dict[str, Any]]:
             },
         },
     ]
+
+
+def _bilibili_read_schema() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "bilibili_read",
+            "description": (
+                "读取一个哔哩哔哩（B站）视频的实际内容：返回标题、UP主、时长、链接和字幕转写"
+                "（无字幕时会尝试音频转写，或返回此前生成的总结）。"
+                "用户消息里出现 B站视频链接、BV号、b23.tv 短链，或明确表达想聊/看/总结某个B站视频时使用；"
+                "拿到素材后用自己的话自然地聊这个视频，不要机械罗列。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "video": {
+                        "type": "string",
+                        "description": (
+                            "B站视频链接、BV号（如 BV1GJ411x7h7）、av号或 b23.tv 短链，"
+                            "从用户消息中原样提取即可。"
+                        ),
+                    },
+                },
+                "required": ["video"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _anima_tool_schemas() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "anima_draw",
+                "description": (
+                    "画一张动漫风格的图片并自动发送到当前会话。"
+                    "用户表达任何绘画意图时使用，例如“画一张/来一张/帮我画/"
+                    "生成一张/给我来张”某个人物、场景或设定的图。"
+                    "prompt 直接传用户想要的画面内容（自然语言即可），"
+                    "系统会自动整理成 Danbooru 标签并交给本机绘图服务；"
+                    "不要自己改写成英文标签，也不要追问参数。"
+                    "生成需要一两分钟，调用后用一句自然的话告知正在画即可，"
+                    "不要声称已经画完。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": (
+                                "想要画面的具体描述：人物/角色、外观、服装、"
+                                "动作、场景与氛围，尽量保留用户原话里的细节。"
+                            ),
+                        },
+                        "width": {
+                            "type": "integer",
+                            "description": "可选画布宽度；不确定时留空使用默认尺寸。",
+                        },
+                        "height": {
+                            "type": "integer",
+                            "description": "可选画布高度；不确定时留空使用默认尺寸。",
+                        },
+                    },
+                    "required": ["prompt"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "anima_status",
+                "description": (
+                    "查询本机绘图服务的连接与模型就绪状态。"
+                    "用户问绘图功能是否可用、画画为什么失败，"
+                    "或生图反复失败需要判断原因时使用。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+
+def _minimax_draw_tool_schemas() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "draw_image",
+                "description": (
+                    "画一张图片并自动发送到当前会话。"
+                    "用户表达任何绘画意图时使用，例如“画一张/来一张/帮我画/"
+                    "生成一张/给我来张”某个人物、场景或设定的图。"
+                    "提到真实人物、明星、VTuber、游戏动漫角色名字时也必须调用："
+                    "系统会自动联网检索该人物外貌并转化为描述性提示词，"
+                    "不存在版权或侵权拦截问题，不要因为提到人名而拒绝或敷衍。"
+                    "提到具体角色/人物时，在 prompt 里保留其英文名或罗马音名"
+                    "（如 Kurumi Tokisaki、Rem、Hatsune Miku），绘图模型对知名"
+                    "角色有先验知识，人名+外貌特征组合还原度最高。"
+                    "prompt 请先在内部把用户的中文描述翻译成英文并适度扩充细节"
+                    "（主体外观、服装、动作、场景、光线、构图），英文提示词效果更好。"
+                    "拟人/拟兽类角色（如“螃蟹娘”“猫娘”）必须把对应动物特征写具体"
+                    "（例如螃蟹娘要写 crab claws as hands、red carapace armor、"
+                    "crab-leg motifs 等），只写“crab girl”模型无法理解。"
+                    "风格不要自行编造，按用户要求映射到 style 枚举。"
+                    "生成需要几秒到几十秒，调用后用一句自然的话告知正在画即可，"
+                    "不要声称已经画完。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "prompt": {
+                            "type": "string",
+                            "description": (
+                                "English description of the image: put the subject's "
+                                "appearance first (hair color/style, eye color, "
+                                "outfit, signature items, animal/robot features), "
+                                "then scene, lighting, composition."
+                            ),
+                        },
+                        "aspect_ratio": {
+                            "type": "string",
+                            "enum": [
+                                "1:1",
+                                "3:4",
+                                "4:3",
+                                "2:3",
+                                "3:2",
+                                "16:9",
+                                "9:16",
+                            ],
+                            "description": (
+                                "可选画幅比例。人像立绘默认 3:4 或 2:3，"
+                                "风景或横幅默认 3:2 或 16:9，头像默认 1:1；"
+                                "用户未提时按画面内容选择。"
+                            ),
+                        },
+                        "style": {
+                            "type": "string",
+                            "enum": [
+                                "auto",
+                                "manga",
+                                "energetic",
+                                "watercolor",
+                                "medieval",
+                                "realistic",
+                            ],
+                            "description": (
+                                "可选画风：auto=默认动漫（通用）；manga=漫画；"
+                                "energetic=元气风；watercolor=水彩；medieval=中世纪；"
+                                "realistic=写实照片感。用户未提时用 auto。"
+                            ),
+                        },
+                    },
+                    "required": ["prompt"],
+                    "additionalProperties": False,
+                },
+            },
+        },
+    ]
+
+
+def _fact_check_schema() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "fact_check",
+            "description": (
+                "核查一条事实性说法的真假（返回：✅ 真的 / ❌ 假的 / "
+                "⚠️ 布吉岛 + 中文解释）。用户问“这是真的吗”“真的假的”"
+                "“靠谱吗”“是谣言吗”或英文“is it true?”“it's true?”"
+                "“really?”“fact or fake?”，或引用一条消息求证时使用。"
+                "claim 传待核查的原始说法（去掉“是真的吗”等疑问词，"
+                "保留可判断真伪的完整内容；用户引用了消息时核查引用的内容，"
+                "当前消息里的补充说明一并带上）。时事、价格、版本、新闻等"
+                "时效性内容必须调用本工具，不要凭印象回答。"
+                "结果请原样保留裁决行（✅/❌/⚠️ 开头那行）再附解释，"
+                "不要省略或改写裁决结论。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "claim": {
+                        "type": "string",
+                        "description": (
+                            "待核查的说法原文，中文，保留完整语义，"
+                            "例如“长期喝纯净水会导致矿物质流失”"
+                            "“某游戏将于下月停服”。"
+                        ),
+                    },
+                },
+                "required": ["claim"],
+                "additionalProperties": False,
+            },
+        },
+    }
 
 
 def _web_search_schema(config: Any) -> dict[str, Any]:

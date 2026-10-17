@@ -89,6 +89,19 @@ class CapabilityHub:
 def _default_contracts() -> list[CapabilityContract]:
     return [
         CapabilityContract(
+            name="image.generate",
+            description="根据文字描述生成并发送一张新图片（含联网检索人物外貌）",
+            read_only=False,
+            has_side_effect=True,
+            required_fields=(),
+            success_condition="调用绘图工具真实生成图片并送达当前会话，不以口头描述代替",
+            can_handle=lambda meaning, state: meaning.action_domain == "image.generate"
+            or _goal_contains(
+                meaning,
+                "帮我画", "给我画", "画一张", "画个", "画图", "生成图", "生成一张",
+            ),
+        ),
+        CapabilityContract(
             name="music.sing",
             description="按歌名从完整音乐目录选择整首成品并发送真实 QQ 语音",
             read_only=False,

@@ -16,7 +16,7 @@ from atri_qq_bot.message_plan import (
 )
 from atri_qq_bot.memory import UserMemoryStore
 from atri_qq_bot.persona import AtriReplyEngine
-from atri_qq_bot.proactive import morning_greeting_text, parse_hhmm
+from atri_qq_bot.proactive import MORNING_GREETINGS, morning_greeting_text, parse_hhmm
 from atri_qq_bot.stickers import StickerManager
 from atri_webui.memory_admin import MemoryAdmin
 
@@ -1227,10 +1227,16 @@ def test_parse_hhmm_accepts_morning_time() -> None:
 
 
 def test_morning_greeting_is_positive_and_morning_focused() -> None:
-    text = morning_greeting_text(datetime(2026, 6, 1, 7, 30))
+    # 周一路径会剥掉「早上好。」/「早安，」前缀再补「早安。」，用周一中午点覆盖两个分支。
+    monday_text = morning_greeting_text(datetime(2026, 6, 1, 7, 30))
+    assert "早安" in monday_text or "早上好" in monday_text
 
-    assert any(word in text for word in ("早安", "早上好", "清晨", "7 点半"))
-    assert any(word in text for word in ("元气", "前进", "启动", "顺利", "心情", "勇气", "出发"))
+    for text in MORNING_GREETINGS:
+        assert any(word in text for word in ("早安", "早上好"))
+        assert any(
+            word in text
+            for word in ("夸奖", "元气", "关照", "记着", "心情", "陪你", "出发")
+        )
 
 
 def test_morning_target_is_due_once_per_day_with_owner_qq(tmp_path) -> None:

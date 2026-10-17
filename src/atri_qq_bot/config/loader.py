@@ -18,6 +18,7 @@ from .env import (
     _env_int,
     _env_int_tuple,
     _env_path,
+    _env_str_tuple,
     _optional_env,
     _project_root,
 )
@@ -222,6 +223,18 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         morning_greeting_time=_env("MORNING_GREETING_TIME", "07:30"),
         morning_greeting_timezone=_env("MORNING_GREETING_TIMEZONE", "Asia/Shanghai"),
         morning_greeting_catchup_minutes=_env_int("MORNING_GREETING_CATCHUP_MINUTES", 90),
+        goodnight_enabled=_env_bool("GOODNIGHT_ENABLED", True),
+        goodnight_time=_env("GOODNIGHT_TIME", "23:30"),
+        goodnight_timezone=_env("GOODNIGHT_TIMEZONE", "Asia/Shanghai"),
+        goodnight_catchup_minutes=_env_int("GOODNIGHT_CATCHUP_MINUTES", 30),
+        goodnight_image=_env_path(
+            "GOODNIGHT_IMAGE", root / "data" / "assets" / "goodnight.jpg", root
+        ),
+        goodnight_state_path=_env_path(
+            "GOODNIGHT_STATE_PATH",
+            root / "data" / "runtime" / "goodnight-state.json",
+            root,
+        ),
         toolbox_enabled=_env_bool("TOOLBOX_ENABLED", True),
         toolbox_timeout_seconds=_env_float("TOOLBOX_TIMEOUT_SECONDS", 8.0),
         toolbox_max_bytes=_env_int("TOOLBOX_MAX_BYTES", 2_000_000),
@@ -260,6 +273,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         ),
         toolbox_ocr_enabled=_env_bool("TOOLBOX_OCR_ENABLED", False),
         saucenao_api_key=_env("SAUCENAO_API_KEY", "").strip(),
+        animetrace_enabled=_env_bool("ANIMETRACE_ENABLED", True),
         toolbox_video_frame_analysis_enabled=_env_bool("TOOLBOX_VIDEO_FRAME_ANALYSIS_ENABLED", True),
         toolbox_video_max_frames=max(1, min(8, _env_int("TOOLBOX_VIDEO_MAX_FRAMES", 4))),
         toolbox_video_deadline_seconds=max(
@@ -297,6 +311,27 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         bocha_api_key=_optional_env("BOCHA_API_KEY"),
         web_grounding_review_enabled=_env_bool("WEB_GROUNDING_REVIEW_ENABLED", True),
         online_music_enabled=_env_bool("ONLINE_MUSIC_ENABLED", True),
+        anima_enabled=_env_bool("ANIMA_ENABLED", False),
+        anima_prompt_model=_env("ANIMA_PROMPT_MODEL", ""),
+        anima_prompt_base_url=_env("ANIMA_PROMPT_BASE_URL", "").rstrip("/"),
+        anima_prompt_api_key=_optional_env("ANIMA_PROMPT_API_KEY"),
+        anima_prompt_timeout_seconds=max(
+            10.0, min(300.0, _env_float("ANIMA_PROMPT_TIMEOUT_SECONDS", 90.0))
+        ),
+        anima_tool_timeout_seconds=max(
+            60.0, min(1800.0, _env_float("ANIMA_TOOL_TIMEOUT_SECONDS", 420.0))
+        ),
+        minimax_draw_enabled=_env_bool("MINIMAX_ENABLED", False),
+        minimax_api_key=_optional_env("MINIMAX_API_KEY"),
+        minimax_base_url=_env("MINIMAX_BASE_URL", "https://api.minimax.cn").rstrip("/"),
+        minimax_timeout_seconds=max(
+            30.0, min(300.0, _env_float("MINIMAX_TIMEOUT_SECONDS", 120.0))
+        ),
+        minimax_prompt_refine_enabled=_env_bool("MINIMAX_PROMPT_REFINE", True),
+        isittrue_enabled=_env_bool("ISITTRUE_ENABLED", False),
+        isittrue_timeout_seconds=max(
+            30.0, min(300.0, _env_float("ISITTRUE_TIMEOUT_SECONDS", 120.0))
+        ),
         meme_learning_enabled=_env_bool("MEME_LEARNING_ENABLED", True),
         meme_learning_interval_hours=max(
             1, _env_int("MEME_LEARNING_INTERVAL_HOURS", 6)
@@ -322,6 +357,89 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
             30.0, _env_float("BILIBILI_TIMEOUT_SECONDS", 300.0)
         ),
         bilibili_audio_dir=_env("BILIBILI_AUDIO_DIR", ""),
+        bilibili_ai_tool_enabled=_env_bool("BILIBILI_AI_TOOL_ENABLED", True),
+        bilibili_ai_tool_timeout_seconds=max(
+            10.0, _env_float("BILIBILI_AI_TOOL_TIMEOUT_SECONDS", 150.0)
+        ),
+        bilibili_ai_tool_max_chars=max(
+            500, _env_int("BILIBILI_AI_TOOL_MAX_CHARS", 4000)
+        ),
+        what_to_eat_enabled=_env_bool("WHAT_TO_EAT_ENABLED", True),
+        what_to_eat_trigger_keywords=_env_str_tuple(
+            "WHAT_TO_EAT_TRIGGER_KEYWORDS", ("吃什么", "吃啥")
+        ),
+        what_to_eat_recommend_probability=max(
+            0.0, min(1.0, _env_float("WHAT_TO_EAT_RECOMMEND_PROBABILITY", 0.5))
+        ),
+        what_to_eat_builtin_foods=_env_str_tuple(
+            "WHAT_TO_EAT_BUILTIN_FOODS", BotConfig.what_to_eat_builtin_foods
+        ),
+        what_to_eat_custom_foods=_env_str_tuple("WHAT_TO_EAT_CUSTOM_FOODS", ()),
+        what_to_eat_rate_limit_max=max(
+            1, _env_int("WHAT_TO_EAT_RATE_LIMIT_MAX", 3)
+        ),
+        what_to_eat_rate_limit_window_seconds=max(
+            10, _env_int("WHAT_TO_EAT_RATE_LIMIT_WINDOW_SECONDS", 60)
+        ),
+        what_to_eat_echo_cooldown_seconds=max(
+            0, min(3600, _env_int("WHAT_TO_EAT_ECHO_COOLDOWN_SECONDS", 15))
+        ),
+        wiw_enabled=_env_bool("WIW_ENABLED", True),
+        wiw_mode=(
+            mode
+            if (mode := _env("WIW_MODE", "full").strip().lower())
+            in ("record_only", "identity_only", "context", "full")
+            else "full"
+        ),
+        wiw_db_path=_env_path(
+            "WIW_DB_PATH",
+            root / "data" / "who_is_who" / "who_is_who.db",
+            root,
+        ),
+        wiw_learn_nicknames=_env_bool("WIW_LEARN_NICKNAMES", True),
+        wiw_detect_commitments=_env_bool("WIW_DETECT_COMMITMENTS", True),
+        wiw_topic_active_minutes=max(1, _env_int("WIW_TOPIC_ACTIVE_MINUTES", 30)),
+        wiw_max_messages_per_group=max(20, _env_int("WIW_MAX_MESSAGES_PER_GROUP", 500)),
+        wiw_retention_days=max(1, _env_int("WIW_RETENTION_DAYS", 30)),
+        wiw_enabled_groups=_env_str_tuple("WIW_ENABLED_GROUPS", ()),
+        wiw_blocked_groups=_env_str_tuple("WIW_BLOCKED_GROUPS", ()),
+        wiw_admin_ids=_env_str_tuple("WIW_ADMIN_IDS", ()),
+        wiw_restricted_ids=_env_str_tuple("WIW_RESTRICTED_IDS", ()),
+        wiw_explicit_users_json=_env("WIW_EXPLICIT_USERS_JSON", ""),
+        wiw_default_priority=_env_int("WIW_DEFAULT_PRIORITY", 10),
+        wiw_authority_enabled=_env_bool("WIW_AUTHORITY_ENABLED", True),
+        wiw_self_preference_first=_env_bool("WIW_SELF_PREFERENCE_FIRST", True),
+        wiw_allow_whitelist_override=_env_bool("WIW_ALLOW_WHITELIST_OVERRIDE", False),
+        wiw_newer_rule_wins=_env_bool("WIW_NEWER_RULE_WINS", True),
+        wiw_max_related_messages=max(0, _env_int("WIW_MAX_RELATED_MESSAGES", 8)),
+        wiw_max_related_people=max(1, _env_int("WIW_MAX_RELATED_PEOPLE", 4)),
+        wiw_max_related_states=max(0, _env_int("WIW_MAX_RELATED_STATES", 6)),
+        wiw_max_injection_chars=max(
+            300, _env_int("WIW_MAX_INJECTION_CHARS", 1600)
+        ),
+        meme_steal_enabled=_env_bool("MEME_STEAL_ENABLED", True),
+        meme_steal_mode=str(
+            _env("MEME_STEAL_MODE", "cooldown")
+        ).strip().lower(),
+        meme_steal_chance=max(
+            0.0, min(1.0, _env_float("MEME_STEAL_CHANCE", 0.5))
+        ),
+        meme_steal_cooldown_seconds=max(
+            0, min(3600, _env_int("MEME_STEAL_COOLDOWN_SECONDS", 20))
+        ),
+        meme_steal_max_bytes=max(
+            100_000, _env_int("MEME_STEAL_MAX_BYTES", 3_000_000)
+        ),
+        meme_steal_library_max=max(
+            20, _env_int("MEME_STEAL_LIBRARY_MAX", 300)
+        ),
+        meme_steal_queue_size=max(
+            1, min(64, _env_int("MEME_STEAL_QUEUE_SIZE", 8))
+        ),
+        meme_steal_send_ratio=max(
+            0.0, min(1.0, _env_float("MEME_STEAL_SEND_RATIO", 0.3))
+        ),
+        meme_steal_plain_images=_env_bool("MEME_STEAL_PLAIN_IMAGES", True),
         webui_enabled=_env_bool("WEBUI_ENABLED", True),
         webui_host=_env("WEBUI_HOST", "127.0.0.1"),
         webui_port=_env_int("WEBUI_PORT", 8787),

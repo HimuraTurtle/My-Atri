@@ -25,6 +25,7 @@ from .parsing import (
     is_bilibili_domain,
     is_short_bili_url,
     message_is_pure_link,
+    strip_address_prefix,
     url_from_event,
 )
 from .subtitles import acquire_transcript
@@ -98,7 +99,9 @@ class BilibiliService:
 
     @staticmethod
     def is_command(text: str) -> bool:
-        stripped = (text or "").strip()
+        # 群友习惯在命令前带称呼（"atri，B站总结 xxx"、@机器人 B站总结 xxx），
+        # 先剥离再匹配，避免命令漏拦后落入聊天模型、模型又拿不到视频素材。
+        stripped = strip_address_prefix(text)
         if not stripped:
             return False
         if any(stripped.startswith(prefix) for prefix in HELP_PREFIXES):
@@ -124,7 +127,7 @@ class BilibiliService:
     async def handle_command(
         self, text: str, conversation_id: str, user_id: Any = None
     ) -> BilibiliCommandResult:
-        stripped = (text or "").strip()
+        stripped = strip_address_prefix(text)
         if any(stripped.startswith(prefix) for prefix in HELP_PREFIXES):
             return BilibiliCommandResult(
                 messages=[OutgoingMessage("text", USAGE_HELP)],
@@ -139,7 +142,16 @@ class BilibiliService:
             )
 
         is_parse = any(stripped.startswith(prefix) for prefix in PARSE_PREFIXES)
-        arg = stripped.split(maxsplit=1)[1].strip() if len(stripped.split(maxsplit=1)) > 1 else ""
+        # 按命中的关键词切片取参，容忍"B站总结<链接"的无空格写法。
+        command = next(
+            (
+                prefix
+                for prefix in SUMMARY_PREFIXES + PARSE_PREFIXES
+                if stripped.startswith(prefix)
+            ),
+            "",
+        )
+        arg = stripped[len(command) :].strip() if command else ""
         if not arg:
             notice = "❌ 缺少视频链接\n用法: B站总结 <B站视频链接或BV号>"
             return BilibiliCommandResult(
@@ -198,6 +210,108 @@ class BilibiliService:
             LOGGER.warning("自动总结获取视频信息失败：%s", exc)
             return None
         return await self._summary_result(info, page, conversation_id)
+
+    # ── LLM 工具入口（BiliRead 理念：素材交给人设融合回复） ──────
+
+    async def tool_read_video(self, conversation_id: str, arg: str) -> dict[str, Any]:
+        """bilibili_read 工具：返回视频信息与内容素材，供对话模型人设化讨论。
+
+        与命令总结（固定格式直接输出）不同，这里把「缓存总结/字幕转写」
+        作为素材交回对话模型，由亚托莉以自己的口吻聊这个视频。
+        """
+        arg = (arg or "").strip()
+        if not arg:
+            return {"ok": False, "error": "缺少视频链接或 BV 号"}
+
+        remaining = self._cooldown_remaining(f"tool:{conversation_id}")
+        if remaining > 0:
+            return {
+                "ok": False,
+                "error": f"视频读取太频繁，请等 {remaining} 秒后再试",
+            }
+
+        target, page, error = await self._resolve_target(arg)
+        if error or not target:
+            return {"ok": False, "error": error or "无法识别视频"}
+        try:
+            info = await self.client.get_video_info(target)
+        except BilibiliError as exc:
+            return {"ok": False, "error": f"视频信息获取失败：{exc}"}
+
+        self._punch_cooldown(f"tool:{conversation_id}")
+        base = {
+            "ok": True,
+            "title": info.title,
+            "uploader": info.owner_name,
+            "duration_seconds": info.duration,
+            "view_count": info.view,
+            "url": info.url,
+        }
+
+        # 命令模式 6 小时内生成过总结时直接复用：快，且省一轮转写。
+        cached = self.summarizer.cached_summary(info.bvid)
+        if cached:
+            return {
+                **base,
+                "material_type": "cached_summary",
+                "material": cached,
+                "note": "这是此前生成的该视频总结，可基于它和用户继续聊，不要原样粘贴。",
+            }
+
+        cid = info.cid
+        if page > 1 and info.pages > 1:
+            try:
+                page_cid = await self.client.get_page_cid(info.bvid, page)
+                if page_cid:
+                    cid = page_cid
+            except BilibiliError:
+                pass
+
+        asr_enabled = bool(getattr(self.config, "bilibili_asr_enabled", True))
+        audio_path: Path | None = None
+        try:
+            transcript, audio_path = await acquire_transcript(
+                self.client,
+                info.bvid,
+                cid,
+                audio_dir=self._audio_dir,
+                asr_enabled=asr_enabled,
+            )
+        finally:
+            if audio_path is not None:
+                try:
+                    audio_path.unlink(missing_ok=True)
+                except OSError:
+                    LOGGER.warning("音频清理失败：%s", audio_path)
+
+        if transcript is None:
+            return {
+                **base,
+                "material_type": "none",
+                "material": "",
+                "note": (
+                    "该视频没有可用字幕，音频转写也未成功（或已被关闭）。"
+                    "只能基于标题和基本信息回应，不要假装看过视频内容。"
+                ),
+            }
+
+        max_chars = max(
+            500,
+            int(getattr(self.config, "bilibili_ai_tool_max_chars", 4000) or 4000),
+        )
+        lines = [f"{format_time(seg.start)} {seg.text}" for seg in transcript.segments]
+        text = "\n".join(lines)
+        if len(text) > max_chars:
+            text = text[:max_chars] + "\n...(后续内容已省略)"
+        return {
+            **base,
+            "material_type": transcript.source,  # "subtitle" | "asr"
+            "material": text,
+            "note": (
+                "这是视频的逐时段字幕/转写素材。请用自己的话、符合当前人设地和用户聊这个视频，"
+                "不要机械罗列字幕；提到时间点时可用 分:秒 形式。"
+            ),
+        }
 
     # ── 总结编排 ──────────────────────────────────────────────────
 

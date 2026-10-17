@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from . import *  # noqa: F403 — compatibility globals are populated by the package.
 from . import (
     _toolbox_formatting,
@@ -181,7 +183,7 @@ def _merge_visual_statuses(statuses: list[str]) -> str:
         return "verified"
     if len(cleaned) == 1:
         return cleaned[0]
-    if all(status in {"verified", "ocr_only"} for status in cleaned):
+    if all(status in {"verified", "ocr_only", "reverse_only"} for status in cleaned):
         return "partial"
     if any(status == "unavailable" for status in cleaned):
         return "unavailable"
@@ -431,8 +433,14 @@ def _visual_response_failure_reason(
     cleaned = str(cleaned_text)
     if len(re.sub(r"\s+", "", cleaned)) < 16:
         return "too_short"
-    done_reason = str((metrics or {}).get("done_reason") or "").strip().lower()
-    if done_reason in {"length", "max_tokens"} and not _is_complete_visual_analysis(cleaned):
+    # Ollama 上报 done_reason，云端 OpenAI 兼容接口上报 finish_reason；
+    # 两者为 length/max_tokens 且结构化字段不完整时视为截断，进入重试回路。
+    stop_reason = str(
+        (metrics or {}).get("done_reason")
+        or (metrics or {}).get("finish_reason")
+        or ""
+    ).strip().lower()
+    if stop_reason in {"length", "max_tokens"} and not _is_complete_visual_analysis(cleaned):
         return "truncated_output"
     if str(raw_text).lstrip().startswith("{") and not _is_complete_visual_analysis(cleaned):
         return "invalid_structured_output"
@@ -545,11 +553,65 @@ def _duration_ms(value: Any) -> int | None:
 
 _TRACEMOE_CONFIDENT = 0.85
 _TRACEMOE_HINT = 0.75
-_REVERSE_SEARCH_CACHE: dict[str, list[str]] = {}
+_SAUCENAO_CONFIDENT = 85.0
+_REVERSE_SEARCH_CACHE: dict[str, list[ReverseSearchHit]] = {}
 _REVERSE_SEARCH_CACHE_LIMIT = 64
 
 
-def _reverse_search_cache_get(digest: str) -> list[str] | None:
+@dataclass(frozen=True)
+class ReverseSearchHit:
+    """一次以图搜图的结构化命中；similarity 统一用百分制（0-100）。"""
+
+    provider: str  # "trace.moe" | "animetrace" | "saucenao"
+    title: str = ""
+    characters: str = ""
+    episode: str = ""
+    similarity: float = 0.0
+    confident: bool = False
+    detail: str = ""
+
+    def finding_text(self) -> str:
+        if self.provider == "trace.moe":
+            text = (
+                f"反向搜图（trace.moe）：该画面与《{self.title}》{self.episode}的某一帧"
+                + ("高度匹配" if self.confident else "中等程度匹配")
+                + f"（相似度 {self.similarity:.0f}%），"
+                + (
+                    "来源判断可信，可以直接据此讨论作品。"
+                    if self.confident
+                    else "仅作参考线索，不作为确定的来源结论。"
+                )
+            )
+            if self.detail and self.detail != self.title:
+                text += f"该作品罗马音记名：{self.detail}。"
+            return text
+        if self.provider == "animetrace":
+            text = "反向搜图（AnimeTrace）：画面人脸与"
+            if self.characters:
+                text += f"角色「{self.characters}」"
+                if self.title:
+                    text += f"（出自《{self.title}》）"
+            elif self.title:
+                text += f"《{self.title}》相关角色"
+            else:
+                return ""
+            text += "匹配；AnimeTrace 是专门的二次元角色库，对无人脸图不返回结果，"
+            text += "该命中可直接作为角色身份依据"
+            if self.detail:
+                text += f"（{self.detail}）"
+            text += "。"
+            return text
+        parts = [f"相似度 {self.similarity:.0f}%"]
+        if self.characters:
+            parts.append(f"角色：{self.characters}")
+        if self.title:
+            parts.append(f"来源：{self.title}")
+        if self.detail:
+            parts.append(f"索引：{self.detail[:40]}")
+        return f"反向搜图（SauceNAO）：{'；'.join(parts)}"
+
+
+def _reverse_search_cache_get(digest: str) -> list[ReverseSearchHit] | None:
     if digest in _REVERSE_SEARCH_CACHE:
         value = _REVERSE_SEARCH_CACHE.pop(digest)
         _REVERSE_SEARCH_CACHE[digest] = value  # 触碰置新，保持 LRU 顺序
@@ -557,10 +619,10 @@ def _reverse_search_cache_get(digest: str) -> list[str] | None:
     return None
 
 
-def _reverse_search_cache_put(digest: str, findings: list[str]) -> None:
+def _reverse_search_cache_put(digest: str, hits: list[ReverseSearchHit]) -> None:
     while len(_REVERSE_SEARCH_CACHE) >= _REVERSE_SEARCH_CACHE_LIMIT:
         _REVERSE_SEARCH_CACHE.pop(next(iter(_REVERSE_SEARCH_CACHE)))
-    _REVERSE_SEARCH_CACHE[digest] = list(findings)
+    _REVERSE_SEARCH_CACHE[digest] = list(hits)
 
 
 async def _tracemoe_search(data: bytes) -> list[dict[str, Any]]:
@@ -611,69 +673,37 @@ async def _anilist_media_titles(anilist_id: int) -> dict[str, str]:
     }
 
 
-async def reverse_image_findings(data: bytes) -> list[str]:
-    """以图搜图：动漫截图走 trace.moe，拿到帧级匹配就作为高置信证据。"""
+async def _tracemoe_hits(data: bytes) -> list[ReverseSearchHit]:
+    """trace.moe 帧级匹配：只保留相似度达线索阈值（≥75%）的最佳命中。"""
 
-    digest = hashlib.sha1(data).hexdigest()
-    cached = _reverse_search_cache_get(digest)
-    if cached is not None:
-        return cached
-
-    findings: list[str] = []
-    try:
-        results = await _tracemoe_search(data)
-    except Exception:
+    results = await _tracemoe_search(data)
+    top = results[0] if results else None
+    if not top or top["similarity"] < _TRACEMOE_HINT:
         return []
 
-    top = results[0] if results else None
-    if top and top["similarity"] >= _TRACEMOE_HINT:
-        titles: dict[str, str] = {}
-        try:
-            titles = await _anilist_media_titles(int(top["anilist_id"]))
-        except Exception:
-            pass
-        display = titles.get("native") or titles.get("romaji") or ""
-        if not display:
-            display = top.get("filename")[:60]
-        episode = top.get("episode")
-        episode_text = f"第{episode}话" if episode else "正片"
-        percent = top["similarity"] * 100
-        if top["similarity"] >= _TRACEMOE_CONFIDENT:
-            findings.append(
-                f"反向搜图（trace.moe）：该画面与《{display}》{episode_text}的某一帧高度匹配"
-                f"（相似度 {percent:.0f}%），来源判断可信，可以直接据此讨论作品。"
-            )
-        else:
-            findings.append(
-                f"反向搜图（trace.moe）：该画面与《{display}》{episode_text}中等程度匹配"
-                f"（相似度 {percent:.0f}%），仅作参考线索，不作为确定的来源结论。"
-            )
-        if titles.get("romaji") and titles.get("native") and titles["romaji"] != display:
-            findings.append(f"该作品罗马音记名：{titles['romaji']}")
-
-    _reverse_search_cache_put(digest, findings)
-    return findings
+    titles: dict[str, str] = {}
+    try:
+        titles = await _anilist_media_titles(int(top["anilist_id"]))
+    except Exception:
+        pass
+    display = titles.get("native") or titles.get("romaji") or ""
+    if not display:
+        display = top.get("filename")[:60]
+    episode = top.get("episode")
+    episode_text = f"第{episode}话" if episode else "正片"
+    return [
+        ReverseSearchHit(
+            provider="trace.moe",
+            title=display,
+            episode=episode_text,
+            similarity=top["similarity"] * 100,
+            confident=top["similarity"] >= _TRACEMOE_CONFIDENT,
+            detail=titles.get("romaji") or "",
+        )
+    ]
 
 
-def _looks_like_anime_material(context_text: str) -> bool:
-    """视觉输出/问题里出现二次元迹象时才值得跑反向搜图，省 API 配额。"""
-
-    tokens = (
-        "动漫",
-        "动画",
-        "番剧",
-        "二次元",
-        "漫画",
-        "漫画风",
-        "anime",
-        "manga",
-        "轻小说",
-    )
-    lowered = str(context_text or "").casefold()
-    return any(token in lowered for token in tokens)
-
-
-async def saucenao_findings(data: bytes, api_key: str) -> list[str]:
+async def _saucenao_hits(data: bytes, api_key: str) -> list[ReverseSearchHit]:
     """SauceNAO 以图搜图：覆盖同人图/Pixiv/动画截图，需要免费注册的 API key。"""
 
     if not api_key:
@@ -693,7 +723,7 @@ async def saucenao_findings(data: bytes, api_key: str) -> list[str]:
         )
     response.raise_for_status()
     body = response.json()
-    findings: list[str] = []
+    hits: list[ReverseSearchHit] = []
     for item in (body.get("results") or [])[:3]:
         header = item.get("header") or {}
         payload = item.get("data") or {}
@@ -706,15 +736,275 @@ async def saucenao_findings(data: bytes, api_key: str) -> list[str]:
         characters = str(payload.get("characters") or payload.get("character") or "").strip()
         source = str(payload.get("source") or payload.get("material") or "").strip()
         index_name = str(header.get("index_name") or "").strip()
-        parts = [f"相似度 {similarity:.0f}%"]
-        if characters:
-            parts.append(f"角色：{characters}")
-        if source:
-            parts.append(f"来源：{source}")
-        if index_name:
-            parts.append(f"索引：{index_name[:40]}")
-        findings.append(f"反向搜图（SauceNAO）：{'；'.join(parts)}")
-    return findings
+        if not characters and not source:
+            continue
+        hits.append(
+            ReverseSearchHit(
+                provider="saucenao",
+                title=source,
+                characters=characters,
+                similarity=similarity,
+                confident=similarity >= _SAUCENAO_CONFIDENT,
+                detail=index_name,
+            )
+        )
+    return hits
+
+
+_ANIMETRACE_SEARCH_URL = "https://api.animetrace.com/v1/search"
+_ANIMETRACE_MODEL_LIST_URL = "https://api.animetrace.com/v1/model/list"
+_ANIMETRACE_MODEL_CACHE_TTL = 3600.0
+_ANIMETRACE_MAX_FACES = 3
+_ANIMETRACE_SUCCESS_CODES = {0, 200, 17720, 17721}
+# 服务端限流/用量错误码：静默跳过不重试（免费公共服务，重试只会更糟）。
+_ANIMETRACE_SKIP_CODES = {17722, 17728, 17731}
+_animetrace_model_cache: dict[str, Any] = {"id": "", "ts": 0.0}
+
+
+def _animetrace_logger():
+    import logging
+
+    return logging.getLogger("atri.toolbox.reverse")
+
+
+def _animetrace_jpeg(data: bytes, max_side: int = 1024) -> bytes:
+    """转成 AnimeTrace 接受的 JPEG；动图取首帧，异常时原样返回交给服务端判格式。"""
+    try:
+        from PIL import Image, ImageOps
+    except Exception:
+        return data
+    try:
+        with Image.open(io.BytesIO(data)) as image:
+            frame = ImageOps.exif_transpose(image.copy()).convert("RGB")
+        frame.thumbnail((max_side, max_side))
+        output = io.BytesIO()
+        frame.save(output, format="JPEG", quality=85)
+        return output.getvalue() or data
+    except Exception:
+        return data
+
+
+async def _animetrace_model() -> str:
+    """当前启用的 AnimeTrace 模型 id（优先默认模型），缓存 1 小时。"""
+    now = time.monotonic()
+    cached = str(_animetrace_model_cache.get("id") or "")
+    if cached and now - float(_animetrace_model_cache.get("ts") or 0.0) < _ANIMETRACE_MODEL_CACHE_TTL:
+        return cached
+    import httpx
+
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        response = await client.get(_ANIMETRACE_MODEL_LIST_URL)
+    response.raise_for_status()
+    models = (response.json() or {}).get("data") or []
+    enabled = [m for m in models if isinstance(m, dict) and m.get("enabled")]
+    chosen = next((m for m in enabled if m.get("default")), enabled[0] if enabled else None)
+    if not chosen or not chosen.get("id"):
+        return cached
+    _animetrace_model_cache["id"] = str(chosen["id"])
+    _animetrace_model_cache["ts"] = now
+    return _animetrace_model_cache["id"]
+
+
+async def _animetrace_hits(data: bytes) -> list[ReverseSearchHit]:
+    """AnimeTrace 角色库人脸匹配：每张检测到的人脸返回一个命中。
+
+    免密钥公开服务（移植自 astrbot_plugin_shitu）。对无人脸/非二次元图片
+    不返回任何框（实测不乱猜），因此命中即视为真实检测、直接参与身份裁决；
+    多候选无相似度分，取 Top-1 作为身份，其余写入 detail 供参考。
+    """
+    model = await _animetrace_model()
+    if not model:
+        return []
+    import httpx
+
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        response = await client.post(
+            _ANIMETRACE_SEARCH_URL,
+            data={"is_multi": "1", "model": model, "ai_detect": "0"},
+            files={"file": ("image.jpg", _animetrace_jpeg(data), "image/jpeg")},
+        )
+    response.raise_for_status()
+    body = response.json()
+    try:
+        code = int(body.get("code") or 0)
+    except (TypeError, ValueError):
+        code = -1
+    if code not in _ANIMETRACE_SUCCESS_CODES:
+        if code not in _ANIMETRACE_SKIP_CODES:
+            _animetrace_logger().warning(
+                "AnimeTrace 返回错误码 %s：%s",
+                code,
+                str(body.get("zh_message") or "")[:120],
+            )
+        return []
+    hits: list[ReverseSearchHit] = []
+    for item in (body.get("data") or [])[:_ANIMETRACE_MAX_FACES]:
+        candidates = [c for c in (item.get("character") or []) if isinstance(c, dict)]
+        top = candidates[0] if candidates else None
+        if not top:
+            continue
+        name = str(top.get("character") or "").strip()
+        work = str(top.get("work") or "").strip()
+        if not name and not work:
+            continue
+        hits.append(
+            ReverseSearchHit(
+                provider="animetrace",
+                title=work,
+                characters=name,
+                # API 不给相似度分；人脸框序即证据排序，合成百分制仅供
+                # max()/日志消费，finding_text 不展示该数字。
+                similarity=100.0 - 5.0 * len(hits),
+                confident=True,
+                detail=f"Top-1 候选，共 {len(candidates)} 项",
+            )
+        )
+    return hits
+
+
+async def reverse_image_search(
+    data: bytes,
+    saucenao_key: str = "",
+    animetrace_enabled: bool = True,
+) -> list[ReverseSearchHit]:
+    """以图搜图统一入口：trace.moe 帧级匹配与 AnimeTrace 角色库匹配并行，
+    均未命中再查 SauceNAO 同人来源。三者回答的问题不同（集数出处 / 角色
+    身份 / 原作来源），并行可在不增加串行延迟的前提下覆盖全部证据面。
+    """
+
+    digest = hashlib.sha1(data).hexdigest()
+    cached = _reverse_search_cache_get(digest)
+    if cached is not None:
+        return cached
+
+    async def _safe_tracemoe() -> list[ReverseSearchHit]:
+        try:
+            return await _tracemoe_hits(data)
+        except Exception:
+            return []
+
+    async def _safe_animetrace() -> list[ReverseSearchHit]:
+        if not animetrace_enabled:
+            return []
+        try:
+            return await _animetrace_hits(data)
+        except Exception:
+            return []
+
+    results = await asyncio.gather(_safe_tracemoe(), _safe_animetrace())
+    hits: list[ReverseSearchHit] = [hit for hits_part in results for hit in hits_part]
+    if not hits and saucenao_key:
+        try:
+            hits = await _saucenao_hits(data, saucenao_key)
+        except Exception:
+            hits = []
+    _reverse_search_cache_put(digest, hits)
+    return hits
+
+
+async def reverse_image_findings(data: bytes) -> list[str]:
+    """兼容旧入口：返回格式化后的反搜证据文本。"""
+    return [hit.finding_text() for hit in await reverse_image_search(data)]
+
+
+def _adjudicate_reverse_identity(
+    vision_text: str,
+    hits: list[ReverseSearchHit],
+) -> tuple[str, str]:
+    """身份裁决：反搜证据优先于视觉模型的外观猜测。
+
+    返回 (裁决结论文本, 修正后的视觉文本)。可信命中（trace.moe ≥85% /
+    AnimeTrace 人脸框 / SauceNAO ≥85%）直接确认身份、置信度升为高并关闭
+    联网核验——帧级匹配和角色库人脸匹配都是比文字检索更强的核验。
+    trace.moe（集数出处）与 AnimeTrace（角色身份）可同时裁决叠加；
+    75-85% 线索级命中不裁决，只保留为参考证据。
+    """
+    text = str(vision_text or "")
+    confident_hits = [hit for hit in hits if hit.confident]
+    if not confident_hits:
+        return "", text
+    trace_confident = [hit for hit in confident_hits if hit.provider == "trace.moe"]
+    animetrace_confident = [hit for hit in confident_hits if hit.provider == "animetrace"]
+    identity_parts: list[str] = []
+    basis_parts: list[str] = []
+    if trace_confident:
+        top = max(trace_confident, key=lambda hit: hit.similarity)
+        identity_parts.append(f"《{top.title}》{top.episode}画面")
+        basis_parts.append(f"trace.moe 帧级匹配（相似度 {top.similarity:.0f}%）")
+    if animetrace_confident:
+        characters = []
+        for hit in animetrace_confident:
+            name = hit.characters or hit.title
+            entry = f"「{name}」"
+            if hit.characters and hit.title:
+                entry += f"（出自《{hit.title}》）"
+            characters.append(entry)
+        identity_parts.append("画面角色为" + "、".join(characters))
+        basis_parts.append(
+            f"AnimeTrace 角色库人脸匹配（检测到 {len(animetrace_confident)} 张人脸）"
+        )
+    if identity_parts:
+        identity = "，".join(identity_parts)
+        basis = " + ".join(basis_parts)
+    else:
+        top = max(confident_hits, key=lambda hit: hit.similarity)
+        identity = top.characters or top.title
+        basis = f"SauceNAO 以图搜图（相似度 {top.similarity:.0f}%）"
+    finding = (
+        f"身份裁决：{basis}证据优先于视觉外观判断，人物/作品身份确认为{identity}。"
+    )
+    if not text:
+        return finding, text
+    for pattern, repl in (
+        (r"(身份/出处\s*[:：])[^；;\r\n]*", lambda match: match.group(1) + identity),
+        (r"(置信度\s*[:：])[^；;\r\n]*", lambda match: match.group(1) + "高"),
+        (r"(需要联网核验\s*[:：])[^；;\r\n]*", lambda match: match.group(1) + "否"),
+    ):
+        text = re.sub(pattern, repl, text, count=1)
+    return finding, text
+
+
+def _looks_like_anime_material(context_text: str) -> bool:
+    """视觉输出/问题里出现二次元或身份询问迹象时才值得跑反向搜图，省 API 配额。
+
+    注意：调用方不能把完整视觉 prompt 混进 context——反幻觉样板自带「动漫」
+    字样会让门控永远为真；结构化输出的字段标签（如「身份/出处」）同理
+    不能当触发词，否则每次视觉成功都会白发一次以图搜图。
+    """
+
+    tokens = (
+        "动漫",
+        "动画",
+        "番",
+        "二次元",
+        "漫画",
+        "轻小说",
+        "日系",
+        "同人",
+        "立绘",
+        "插画",
+        "手办",
+        "galgame",
+        "cosplay",
+        "声优",
+        "vtuber",
+        "皮套",
+        "虚拟歌手",
+        "初音",
+        "东方project",
+        "anime",
+        "manga",
+        "pixiv",
+        "本子",
+        "这是谁",
+        "什么角色",
+        "哪个角色",
+        "什么作品",
+        "哪部",
+        "这是哪",
+    )
+    lowered = str(context_text or "").casefold()
+    return any(token in lowered for token in tokens)
 
 
 def _visual_kind_from_analysis(text: str) -> str:

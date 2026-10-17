@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, Mock, patch
 
 from atri_qq_bot.bilibili.parsing import (
     extract_bvid,
@@ -146,7 +146,7 @@ def test_format_time() -> None:
 def test_build_prompt_contains_segments() -> None:
     segments = [SimpleNamespace(start=1.0, text="你好"), SimpleNamespace(start=62.0, text="世界")]
     prompt = build_prompt(title="T", uploader="U", segments=segments, style="concise")
-    assert "01:00 - 世界" in prompt
+    assert "01:02 - 世界" in prompt
     assert "00:01 - 你好" in prompt
     assert "【简洁模式】" in prompt
     assert "禁止使用任何 Markdown 语法" in prompt
@@ -215,13 +215,17 @@ def test_handle_command_summary_flow() -> None:
         assert "总结\n这是要点" in content
         assert "##" not in content
 
-        # 缓存生效：第二次调用不再请求网络
+        # 缓存生效：同一视频换个用户再问（避开命令冷却），LLM 不会再次生成
         with patch.object(
-            service.client,
-            "get_video_info",
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer,
+            "chat",
             AsyncMock(side_effect=AssertionError("should hit cache")),
         ):
-            result2 = await service.handle_command("B站总结 BV1GJ411x7h7", "group:1")
+            result2 = await service.handle_command(
+                "B站总结 BV1GJ411x7h7", "group:1", user_id=10002
+            )
         assert result2.messages[0].content == content
 
     asyncio.run(scenario())
@@ -273,7 +277,8 @@ def test_auto_summary_pure_link_triggers() -> None:
         ):
             result = await service.auto_summarize(event, text, "group:1")
         assert result is not None
-        assert "自动总结" in result.messages[0].content
+        assert "《测试视频》" in result.messages[0].content
+        assert "总结内容" in result.messages[0].content
 
     asyncio.run(scenario())
 
@@ -289,5 +294,182 @@ def test_auto_summary_per_conversation_cooldown() -> None:
         with patch.object(service.client, "get_video_info", AsyncMock()) as fetch:
             assert await service.auto_summarize(event, text, "group:1") is None
             fetch.assert_not_called()
+
+    asyncio.run(scenario())
+
+
+# ── bilibili_read 工具路径 ─────────────────────────────────────
+
+
+def test_tool_read_video_missing_arg() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config())
+        data = await service.tool_read_video("group:1", "")
+        assert data["ok"] is False
+        assert "缺少" in data["error"]
+
+    asyncio.run(scenario())
+
+
+def test_tool_read_video_returns_subtitle_material() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config())
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer, "cached_summary", Mock(return_value=None)
+        ), patch(
+            "atri_qq_bot.bilibili.service.acquire_transcript",
+            AsyncMock(return_value=(_TRANSCRIPT, None)),
+        ):
+            data = await service.tool_read_video("group:1", "BV1GJ411x7h7")
+        assert data["ok"] is True
+        assert data["title"] == "测试视频"
+        assert data["material_type"] == "subtitle"
+        assert "00:00 开场白" in data["material"]
+        assert "人设" in data["note"]
+
+    asyncio.run(scenario())
+
+
+def test_tool_read_video_reuses_cached_summary() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config())
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer, "cached_summary", Mock(return_value="已有总结")
+        ), patch(
+            "atri_qq_bot.bilibili.service.acquire_transcript",
+            AsyncMock(side_effect=AssertionError("should reuse cache")),
+        ):
+            data = await service.tool_read_video("group:1", "BV1GJ411x7h7")
+        assert data["ok"] is True
+        assert data["material_type"] == "cached_summary"
+        assert data["material"] == "已有总结"
+
+    asyncio.run(scenario())
+
+
+def test_tool_read_video_no_subtitle_degradation() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config(bilibili_asr_enabled=False))
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer, "cached_summary", Mock(return_value=None)
+        ), patch(
+            "atri_qq_bot.bilibili.service.acquire_transcript",
+            AsyncMock(return_value=(None, None)),
+        ):
+            data = await service.tool_read_video("group:1", "BV1GJ411x7h7")
+        assert data["ok"] is True
+        assert data["material_type"] == "none"
+        assert data["material"] == ""
+        assert "不要假装" in data["note"]
+
+    asyncio.run(scenario())
+
+
+def test_tool_read_video_cooldown() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config(bilibili_cooldown_seconds=60))
+        service._punch_cooldown("tool:group:1")
+        with patch.object(service.client, "get_video_info", AsyncMock()) as fetch:
+            data = await service.tool_read_video("group:1", "BV1GJ411x7h7")
+        assert data["ok"] is False
+        assert "频繁" in data["error"]
+        fetch.assert_not_called()
+
+    asyncio.run(scenario())
+
+
+def test_tool_read_video_truncates_long_material() -> None:
+    async def scenario() -> None:
+        long_transcript = SimpleNamespace(
+            segments=[
+                SimpleNamespace(start=float(i), end=i + 1.0, text=f"第{i}句" * 20)
+                for i in range(50)
+            ],
+            source="subtitle",
+        )
+        service = BilibiliService(_config(bilibili_ai_tool_max_chars=500))
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer, "cached_summary", Mock(return_value=None)
+        ), patch(
+            "atri_qq_bot.bilibili.service.acquire_transcript",
+            AsyncMock(return_value=(long_transcript, None)),
+        ):
+            data = await service.tool_read_video("group:1", "BV1GJ411x7h7")
+        assert len(data["material"]) < 600
+        assert "后续内容已省略" in data["material"]
+
+    asyncio.run(scenario())
+
+
+# ── 命令称呼前缀剥离 ───────────────────────────────────────────
+
+
+def test_is_command_accepts_address_prefix() -> None:
+    url = "https://www.bilibili.com/video/BV1GJ411x7h7"
+    assert BilibiliService.is_command("atri，B站总结 https://www.bilibili.com/video/BV1GJ411x7h7")
+    assert BilibiliService.is_command(f"@群友 B站总结 {url}")
+    assert BilibiliService.is_command(f"亚托莉，B站总结 BV1GJ411x7h7")
+    assert BilibiliService.is_command("ATRI！B站帮助")
+    assert not BilibiliService.is_command("atri，今天天气不错")
+    assert not BilibiliService.is_command("帮我总结一下这篇论文")
+    assert not BilibiliService.is_command("atri，B站总结")  # 缺链接不算命令
+
+
+def test_handle_command_strips_address_prefix() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config())
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer, "chat", AsyncMock(return_value="## 总结\n总结内容")
+        ), patch(
+            "atri_qq_bot.bilibili.service.acquire_transcript",
+            AsyncMock(return_value=(_TRANSCRIPT, None)),
+        ):
+            result = await service.handle_command(
+                "atri，B站总结 https://www.bilibili.com/video/BV1GJ411x7h7",
+                "group:1",
+                user_id=10001,
+            )
+        assert "总结内容" in result.messages[0].content
+        # 换个称呼/用户再次触发：命中缓存，不再重新生成
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer,
+            "chat",
+            AsyncMock(side_effect=AssertionError("should hit cache")),
+        ):
+            cached = await service.handle_command(
+                "亚托莉，B站总结 BV1GJ411x7h7", "group:1", user_id=10002
+            )
+        assert "总结内容" in cached.messages[0].content
+
+    asyncio.run(scenario())
+
+
+def test_handle_command_without_space_argument() -> None:
+    async def scenario() -> None:
+        service = BilibiliService(_config())
+        with patch.object(
+            service.client, "get_video_info", AsyncMock(return_value=_video_info())
+        ), patch.object(
+            service.summarizer, "chat", AsyncMock(return_value="## 总结\n总结内容")
+        ), patch(
+            "atri_qq_bot.bilibili.service.acquire_transcript",
+            AsyncMock(return_value=(_TRANSCRIPT, None)),
+        ):
+            result = await service.handle_command(
+                "B站总结BV1GJ411x7h7", "group:1", user_id=10001
+            )
+        assert "总结内容" in result.messages[0].content
 
     asyncio.run(scenario())

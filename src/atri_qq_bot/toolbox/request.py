@@ -29,6 +29,7 @@ class ToolboxRequestMixin(ToolboxMixin):
         visual_statuses: list[str] = []
         visual_ocr_confidence = 0.0
         visual_fallback_available = False
+        visual_reverse_hit = False
 
         def track_visual_result(result: ToolAnalysisResult) -> None:
             nonlocal visual_data
@@ -36,6 +37,7 @@ class ToolboxRequestMixin(ToolboxMixin):
             nonlocal visual_kind
             nonlocal visual_ocr_confidence
             nonlocal visual_fallback_available
+            nonlocal visual_reverse_hit
             if not result.visual_kind:
                 return
             visual_kind = result.visual_kind
@@ -46,6 +48,9 @@ class ToolboxRequestMixin(ToolboxMixin):
             )
             visual_fallback_available = visual_fallback_available or bool(
                 getattr(result, "visual_fallback_available", False)
+            )
+            visual_reverse_hit = visual_reverse_hit or bool(
+                getattr(result, "visual_reverse_hit", False)
             )
             if result.visual_data:
                 visual_data = result.visual_data
@@ -199,6 +204,7 @@ class ToolboxRequestMixin(ToolboxMixin):
             visual_status=_merge_visual_statuses(visual_statuses),
             visual_ocr_confidence=visual_ocr_confidence,
             visual_fallback_available=visual_fallback_available,
+            visual_reverse_hit=visual_reverse_hit,
         )
 
     async def _analyze_video_ref_bounded(

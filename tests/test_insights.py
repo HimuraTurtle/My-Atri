@@ -576,7 +576,9 @@ def test_webui_replaces_developer_tab_with_insights_panels() -> None:
     assert 'id="evaluationTrend"' in html
     assert 'id="evaluationTrendDetails"' in html
     assert 'id="evaluationModelProfile"' in html
-    assert 'id="summaryGenerateButton"' in html
+    # 单一“生成总结”按钮已重构为按群、按周期的计划单元（summaryPlanCell）。
+    assert "generateGroupSummary(" in html
+    assert "立即生成并发送" in html
     assert "/api/evaluations/dashboard" in html
     assert "/api/group-summaries/generate" in html
     assert "/api/evaluations/retry-failed" in html

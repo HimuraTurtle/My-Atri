@@ -150,6 +150,14 @@ def test_is_command_detection() -> None:
     assert not MangaService.is_command("漫画")
     assert not MangaService.is_command("漫画跳舞")
     assert not MangaService.is_command("我想看漫画")
+    # 带称呼前缀的写法不漏拦（与 B站命令同一容错层）
+    assert MangaService.is_command("atri，漫画 搜索 一拳超人")
+    assert MangaService.is_command("@群友 漫画 帮助")
+    assert MangaService.is_command("亚托莉，漫画 我的订阅")
+    assert MangaService.is_command("ATRI！漫画 源")
+    # 称呼后不是命令的闲聊不误拦
+    assert not MangaService.is_command("atri，我想看漫画")
+    assert not MangaService.is_command("亚托莉，漫画好看吗")
 
 
 def test_store_subscription_roundtrip_and_persistence(tmp_path: Path) -> None:
@@ -228,6 +236,13 @@ def test_chapters_command_lists_labels(tmp_path: Path) -> None:
     text = "\n".join(m.content for m in result.messages)
     assert "共 3 话" in text
     assert "第1话" in text and "第3话" in text
+
+
+def test_chapters_command_tolerates_address_prefix(tmp_path: Path) -> None:
+    service, _fake = _service_with_fake_client(_config(tmp_path))
+    result = asyncio.run(service.handle_command("atri，漫画 章节 11", "group:20001"))
+    text = "\n".join(m.content for m in result.messages)
+    assert "共 3 话" in text
 
 
 def test_read_command_delivers_images(tmp_path: Path, monkeypatch) -> None:
