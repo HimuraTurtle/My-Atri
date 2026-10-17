@@ -56,6 +56,30 @@ def is_short_bili_url(url: str) -> bool:
     return host.lower().rstrip(".") in SHORT_URL_DOMAINS
 
 
+# 群友常在命令前加称呼（"atri，B站总结 xxx"、@机器人 B站总结 xxx）；
+# 命令匹配前需要剥掉这些前缀，否则严格 startswith 会漏拦，消息落入聊天模型。
+_ADDRESS_TOKEN_RE = re.compile(
+    r"^(?:@全体成员|@群友|@\d{5,12}|亚托莉|亚托利|atri)",
+    re.IGNORECASE,
+)
+_ADDRESS_TAIL_RE = re.compile(r"^[\s，。,、；;！!？?~～·…《》\"'“”]+")
+# 连续多次剥离上限：称呼+标点再+空格，正常表达不会超过 3 段。
+
+
+def strip_address_prefix(text: str) -> str:
+    """剥离开头对机器人的称呼（@提及、亚托莉/atri 等）及紧随的标点。
+
+    仅用于命令关键词匹配，不影响原文；没有称呼前缀时原样返回（去首尾空白）。
+    """
+    stripped = (text or "").strip()
+    for _ in range(3):
+        match = _ADDRESS_TOKEN_RE.match(stripped)
+        if not match:
+            break
+        stripped = _ADDRESS_TAIL_RE.sub("", stripped[match.end() :], count=1)
+    return stripped.strip()
+
+
 def extract_bvid(text: str) -> str | None:
     if not text:
         return None

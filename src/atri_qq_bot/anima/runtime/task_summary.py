@@ -1,0 +1,196 @@
+from __future__ import annotations
+
+from typing import Any
+
+try:
+    from .deployment_diagnostics import safe_error_summary
+except ImportError:  # pragma: no cover - fallback for direct script-style imports.
+    from anima.runtime.deployment_diagnostics import safe_error_summary
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def build_strategy_summary(
+    task: dict[str, Any],
+    prompt_summary: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a compact, non-secret strategy summary for `last_task.json`.
+
+    Args:
+        task: Current task summary fields.
+        prompt_summary: Detailed prompt pipeline summary.
+
+    Returns:
+        A compact dict suitable for quick debugging and chat-side status.
+    """
+    task = _as_dict(task)
+    prompt_summary = _as_dict(prompt_summary)
+    return {
+        "reference_requested": bool(task.get("reference_image_requested")),
+        "reference_applied": bool(task.get("reference_context_applied")),
+        "raw_mode": bool(prompt_summary.get("raw_mode")),
+        "multi_person_mode": bool(prompt_summary.get("multi_person_mode")),
+        "multi_person_plan_failed": bool(
+            prompt_summary.get("multi_person_plan_failed")
+        ),
+        "planned_character_count": prompt_summary.get("planned_character_count") or 0,
+        "resolved_character_count": prompt_summary.get("resolved_character_count") or 0,
+        "fixed_character_count": prompt_summary.get("fixed_character_count") or 0,
+        "danbooru_resolved_count": prompt_summary.get("danbooru_resolved_count") or 0,
+        "unresolved_character_count": (
+            prompt_summary.get("unresolved_character_count") or 0
+        ),
+        "named_character_detected": bool(
+            prompt_summary.get("named_character_detected")
+        ),
+        "character_resolution_status": (
+            prompt_summary.get("character_resolution_status") or ""
+        ),
+        "character_canonical_tag": (
+            prompt_summary.get("character_canonical_tag") or ""
+        ),
+        "character_identity_tags": list(
+            prompt_summary.get("character_identity_tags") or []
+        ),
+        "character_slots": list(prompt_summary.get("character_slots") or []),
+        "interaction_count": prompt_summary.get("interaction_count") or 0,
+        "grouped_contact": bool(prompt_summary.get("grouped_contact")),
+        "interaction_aliases_normalized": bool(
+            prompt_summary.get("interaction_aliases_normalized")
+        ),
+        "composition_source": prompt_summary.get("composition_source") or "",
+        "hybrid_prompt": bool(prompt_summary.get("hybrid_prompt")),
+        "skipped_reason": prompt_summary.get("skipped_reason") or "",
+        "llm_ok": prompt_summary.get(
+            "llm_ok",
+            not bool(prompt_summary.get("llm_failed")),
+        ),
+        "outfit_summary_ok": prompt_summary.get("outfit_summary_ok", True),
+        "web_search": bool(prompt_summary.get("web_search")),
+        "deep_thinking": bool(prompt_summary.get("deep_thinking")),
+        "fixed_character": bool(prompt_summary.get("fixed_character")),
+        "fixed_character_name": prompt_summary.get("fixed_character_name") or "",
+        "default_style": bool(prompt_summary.get("default_style")),
+        "sensual_mode": bool(prompt_summary.get("sensual_mode")),
+        "asset_reference_mode": bool(prompt_summary.get("asset_reference_mode")),
+        "outfit_transfer": bool(prompt_summary.get("outfit_transfer")),
+        "outfit_transfer_source": prompt_summary.get("outfit_transfer_source") or "",
+        "outfit_transfer_target": prompt_summary.get("outfit_transfer_target") or "",
+        "content_tag_count": prompt_summary.get("llm_content_tag_count") or 0,
+        "final_prompt_chars": prompt_summary.get("final_prompt_chars") or 0,
+    }
+
+
+def build_verification_brief(verification_summary: dict[str, Any]) -> dict[str, Any]:
+    """Build the compact verification section inside `strategy_summary`."""
+    verification_summary = _as_dict(verification_summary)
+    return {
+        "enabled": bool(verification_summary.get("enabled")),
+        "forced_multi_person": bool(verification_summary.get("forced_multi_person")),
+        "forced_named_character": bool(
+            verification_summary.get("forced_named_character")
+        ),
+        "skipped": bool(verification_summary.get("skipped")),
+        "passed": verification_summary.get("final_passed"),
+        "score": verification_summary.get("final_score"),
+        "retry_count": verification_summary.get("retry_count", 0),
+    }
+
+
+def apply_verification_summary(
+    task: dict[str, Any],
+    verification_summary: dict[str, Any],
+    payload: dict[str, Any],
+) -> dict[str, Any]:
+    """Return a task record updated with final verification and payload data."""
+    task = dict(_as_dict(task))
+    verification_summary = dict(_as_dict(verification_summary))
+    payload = _as_dict(payload)
+    task["verification_summary"] = verification_summary
+    task["ok"] = bool(payload.get("ok"))
+    task["error"] = payload.get("error") or ""
+    outputs = payload.get("outputs") or []
+    if outputs:
+        task["outputs"] = outputs
+    strategy = dict(_as_dict(task.get("strategy_summary")))
+    strategy["verification"] = build_verification_brief(verification_summary)
+    task["strategy_summary"] = strategy
+    return task
+
+
+def build_last_task_debug_lines(last_task: dict[str, Any]) -> list[str]:
+    """Render the user-facing latest-task block for `/anm 调试状态`."""
+    last_task = _as_dict(last_task)
+    if not last_task:
+        return []
+    prompt_summary = _as_dict(last_task.get("prompt_summary"))
+    strategy_summary = _as_dict(last_task.get("strategy_summary"))
+    verification_summary = _as_dict(last_task.get("verification_summary"))
+    verification_brief = _as_dict(strategy_summary.get("verification"))
+    fixed_character_name = (
+        strategy_summary.get("fixed_character_name")
+        or prompt_summary.get("fixed_character_name")
+        or "无"
+    )
+    final_prompt_chars = (
+        strategy_summary.get("final_prompt_chars")
+        or prompt_summary.get("final_prompt_chars")
+        or 0
+    )
+    stage_events = prompt_summary.get("stage_events")
+    if not isinstance(stage_events, list):
+        stage_events = []
+    return [
+        "",
+        "上次任务摘要：",
+        f"- 时间：{last_task.get('time') or '未知'}",
+        f"- 动作：{last_task.get('action') or '未知'} / 成功：{last_task.get('ok')}",
+        f"- 错误：{safe_error_summary(last_task.get('error'))}",
+        (
+            "- 引用图："
+            f"requested={strategy_summary.get('reference_requested', last_task.get('reference_image_requested'))} "
+            f"applied={strategy_summary.get('reference_applied', last_task.get('reference_context_applied'))}"
+        ),
+        f"- 固定角色：{'已使用' if fixed_character_name != '无' else '未使用'}",
+        (
+            "- 搜索/思考："
+            f"{strategy_summary.get('web_search', prompt_summary.get('web_search'))} / "
+            f"{strategy_summary.get('deep_thinking', prompt_summary.get('deep_thinking'))}"
+        ),
+        (
+            "- 策略："
+            f"raw={strategy_summary.get('raw_mode')} "
+            f"多人={strategy_summary.get('multi_person_mode')} "
+            f"服装迁移={strategy_summary.get('outfit_transfer')}"
+        ),
+        (
+            "- 多人："
+            f"规划={strategy_summary.get('planned_character_count', 0)} "
+            f"校正={strategy_summary.get('resolved_character_count', 0)} "
+            f"固定={strategy_summary.get('fixed_character_count', 0)} "
+            f"在线={strategy_summary.get('danbooru_resolved_count', 0)} "
+            f"未解析={strategy_summary.get('unresolved_character_count', 0)} "
+            f"位置数={len(strategy_summary.get('character_slots') or [])} "
+            f"互动={strategy_summary.get('interaction_count', 0)} "
+            f"接触组={strategy_summary.get('grouped_contact', False)} "
+            f"别名归一={strategy_summary.get('interaction_aliases_normalized', False)}"
+        ),
+        (
+            "- 提示词健康："
+            f"llm={strategy_summary.get('llm_ok', True)} "
+            f"outfit={strategy_summary.get('outfit_summary_ok', True)}"
+        ),
+        (
+            "- 自检："
+            f"enabled={verification_summary.get('enabled', False)} "
+            f"多人强制={verification_summary.get('forced_multi_person', False)} "
+            f"角色强制={verification_summary.get('forced_named_character', False)} "
+            f"passed={verification_brief.get('passed')} "
+            f"retry={verification_brief.get('retry_count', 0)}"
+        ),
+        f"- 阶段事件：{len(stage_events)} 条",
+        f"- 最终 prompt 长度：{final_prompt_chars}",
+        f"- 输出：{len(last_task.get('outputs') or [])} 张",
+    ]

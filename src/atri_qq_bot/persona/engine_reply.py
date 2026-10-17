@@ -13,6 +13,7 @@ class EngineReplyMixin(PersonaEngineMixin):
         observed: bool = False,
         tool_context: Any | None = None,
         reply_focus: GroupReplyFocus | None = None,
+        context_system: str | None = None,
     ) -> str:
         # 主流程遵循“清洗输入 -> 记录记忆 -> 确定性分支/安全兜底
         # -> 组织模型上下文 -> 校验输出”，便于定位每个阶段的责任。
@@ -93,7 +94,15 @@ class EngineReplyMixin(PersonaEngineMixin):
                     conversation_id,
                     clean_text,
                     nickname,
-                    extra_system=COMFORT_REPAIR_PROMPT if repair_mode else None,
+                    extra_system="\n\n".join(
+                        part
+                        for part in (
+                            context_system,
+                            COMFORT_REPAIR_PROMPT if repair_mode else None,
+                        )
+                        if part
+                    )
+                    or None,
                     profile_id=profile_id,
                     profile=profile,
                     context_profile=context_profile,
@@ -144,6 +153,7 @@ class EngineReplyMixin(PersonaEngineMixin):
                         extra_system="\n\n".join(
                             part
                             for part in (
+                                context_system,
                                 COMFORT_REPAIR_PROMPT if repair_mode else None,
                                 reality_prompt,
                             )
@@ -185,6 +195,7 @@ class EngineReplyMixin(PersonaEngineMixin):
                         extra_system="\n\n".join(
                             part
                             for part in (
+                                context_system,
                                 COMFORT_REPAIR_PROMPT if repair_mode else None,
                                 grounding_prompt,
                             )
@@ -219,6 +230,7 @@ class EngineReplyMixin(PersonaEngineMixin):
                             extra_system="\n\n".join(
                                 part
                                 for part in (
+                                    context_system,
                                     COMFORT_REPAIR_PROMPT if repair_mode else None,
                                     rewrite_prompt,
                                 )

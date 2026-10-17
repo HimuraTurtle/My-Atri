@@ -114,6 +114,17 @@ class BotConfig:
     morning_greeting_time: str = "07:30"
     morning_greeting_timezone: str = "Asia/Shanghai"
     morning_greeting_catchup_minutes: int = 90
+    # 晚安问候：每晚固定时间向机器人加入的所有群聊发送晚安图与晚安语句。
+    goodnight_enabled: bool = True
+    goodnight_time: str = "23:30"
+    goodnight_timezone: str = "Asia/Shanghai"
+    goodnight_catchup_minutes: int = 30
+    goodnight_image: Path = field(
+        default_factory=lambda: _project_root() / "data" / "assets" / "goodnight.jpg"
+    )
+    goodnight_state_path: Path = field(
+        default_factory=lambda: _project_root() / "data" / "runtime" / "goodnight-state.json"
+    )
     toolbox_enabled: bool = True
     toolbox_timeout_seconds: float = 8.0
     toolbox_max_bytes: int = 2_000_000
@@ -134,6 +145,9 @@ class BotConfig:
     toolbox_ocr_enabled: bool = False
     # SauceNAO 以图搜图 API key（免费注册）；空=只用 trace.moe 匿名搜图。
     saucenao_api_key: str = ""
+    # AnimeTrace 二次元角色库人脸匹配（免密钥公开服务，移植自 astrbot_plugin_shitu）；
+    # 命中直接参与身份裁决，与 trace.moe（集数出处）互补。
+    animetrace_enabled: bool = True
     toolbox_video_frame_analysis_enabled: bool = True
     toolbox_video_max_frames: int = 4
     # 单条视频消息的总处理预算，默认 60 秒，超时自动降级到 OCR/标题。
@@ -184,6 +198,30 @@ class BotConfig:
     manga_store_path: Path = field(
         default_factory=lambda: _project_root() / "data" / "manga" / "store.json"
     )
+    # Anima 绘画助手（移植自 astrbot_plugin_anima_master）：自然语言 →
+    # Danbooru tag 提示词管线 → 本机 ComfyUI 文生图。ComfyUI 未部署前
+    # 保持关闭；运行细节配置在 data/anima/config.json 独立管理。
+    anima_enabled: bool = False
+    # 提示词优化 LLM：留空时沿用主聊天模型接口。
+    anima_prompt_model: str = ""
+    anima_prompt_base_url: str = ""
+    anima_prompt_api_key: str | None = None
+    anima_prompt_timeout_seconds: float = 90.0
+    # anima_draw 工具整体执行预算（含提示词优化 + ComfyUI 排队出图）。
+    anima_tool_timeout_seconds: float = 420.0
+    # MiniMax 绘图（image-01 / image-01-live 云端文生图）：自然语言 →
+    # draw_image 工具 → MiniMax API 出图，无本地 GPU 依赖。
+    minimax_draw_enabled: bool = False
+    minimax_api_key: str | None = None
+    # 默认国内站，海外填 https://api.minimaxi.com。
+    minimax_base_url: str = "https://api.minimax.cn"
+    minimax_timeout_seconds: float = 120.0
+    # 画图前用 LLM 精炼提示词：扩写画面细节，涉及具体人物时联网检索外貌。
+    minimax_prompt_refine_enabled: bool = True
+    # 事实核查（移植自 AstrBot「是真的吗」插件）：fact_check 工具，
+    # LLM 规划 → Bocha 搜索取证 → LLM 三态裁决（真/假/无法核实）。
+    isittrue_enabled: bool = False
+    isittrue_timeout_seconds: float = 120.0
     # 热梗自动学习：定时抓取热搜并用聊天模型精选，聊天时注入最新梗。
     meme_learning_enabled: bool = True
     meme_learning_interval_hours: int = 6
@@ -203,6 +241,96 @@ class BotConfig:
     bilibili_max_note_length: int = 3500
     bilibili_timeout_seconds: float = 300.0
     bilibili_audio_dir: str = ""
+    # bilibili_read LLM 工具（BiliRead 理念移植）：把字幕/转写素材交回
+    # 对话模型，由人设融合口吻聊视频；关闭后仅保留「B站总结」命令。
+    bilibili_ai_tool_enabled: bool = True
+    bilibili_ai_tool_timeout_seconds: float = 150.0
+    bilibili_ai_tool_max_chars: int = 4000
+    # 「是啊，吃什么」群聊接梗（移植自 astrbot_plugin_what_to_eat）。
+    # 被动触发：群消息含关键词即响应，不要求 @ 机器人；私聊交给聊天模型。
+    what_to_eat_enabled: bool = True
+    what_to_eat_trigger_keywords: tuple[str, ...] = ("吃什么", "吃啥")
+    # 命中后推荐食物的概率（推荐先冒螃蟹兴奋再转实际推荐），其余概率复读。
+    what_to_eat_recommend_probability: float = 0.5
+    # 食物候选：内置列表（默认大学生常吃 50 种 + 人设螃蟹）+ 自定义列表，
+    # 合并去重后随机。
+    what_to_eat_builtin_foods: tuple[str, ...] = (
+        "黄焖鸡米饭", "麻辣烫", "兰州拉面", "沙县小吃", "重庆小面",
+        "螺蛳粉", "米线", "炒饭", "炒面", "盖浇饭",
+        "水饺", "馄饨", "煎饼果子", "肉夹馍", "烤冷面",
+        "关东煮", "冒菜", "香锅", "炸鸡", "汉堡",
+        "披萨", "寿司", "便当", "凉皮", "凉面",
+        "热干面", "酸辣粉", "炸酱面", "牛肉面", "叉烧饭",
+        "烧腊饭", "煲仔饭", "石锅拌饭", "部队锅", "烤肉饭",
+        "猪脚饭", "卤肉饭", "烤鸭饭", "口水鸡", "酸菜鱼",
+        "水煮鱼", "毛血旺", "干锅", "烤鱼", "烧烤",
+        "奶茶+面包", "便利店", "泡面", "食堂自选", "轻食沙拉",
+        "螃蟹",
+    )
+    what_to_eat_custom_foods: tuple[str, ...] = ()
+    # 频率限制：时间窗口内最大响应次数，超出后强制推荐，打断多 Bot 复读接龙。
+    what_to_eat_rate_limit_max: int = 3
+    what_to_eat_rate_limit_window_seconds: int = 60
+    # 复读后冷却期内强制推荐，防 Bot 之间互相复读循环。
+    what_to_eat_echo_cooldown_seconds: int = 15
+    # Who Is Who 群聊共享上下文（移植自 astrbot_plugin_who_is_who）：
+    # 本地规则记录群成员身份/称呼/话题/承诺，回复前注入共享上下文，
+    # 不增加额外 LLM 调用。
+    wiw_enabled: bool = True
+    # 运行模式：record_only（仅入库）/ identity_only（+身份）/
+    # context（+相关消息）/ full（+状态账本与承诺裁决）。
+    wiw_mode: str = "full"
+    wiw_db_path: Path = field(
+        default_factory=lambda: _project_root() / "data" / "who_is_who" / "who_is_who.db"
+    )
+    # 自动学习「以后叫我XX」「@某人 绰号叫XX」类称呼请求。
+    wiw_learn_nicknames: bool = True
+    # 检测「以后都简短回复」类长期请求，由 AI 回复裁决是否形成承诺。
+    wiw_detect_commitments: bool = True
+    # 话题归属：N 分钟内的词汇重叠消息归入同一话题。
+    wiw_topic_active_minutes: int = 30
+    wiw_max_messages_per_group: int = 500
+    wiw_retention_days: int = 30
+    # 群开关：enabled 为空=全部群；blocked 恒优先排除。
+    wiw_enabled_groups: tuple[str, ...] = ()
+    wiw_blocked_groups: tuple[str, ...] = ()
+    # 插件管理员默认继承 owner_qqs；restricted 用户的规则请求一律拒绝。
+    wiw_admin_ids: tuple[str, ...] = ()
+    wiw_restricted_ids: tuple[str, ...] = ()
+    # 显式白名单 JSON：[{"user_id":"123","group_id":"456","priority":60,
+    # "permissions":["create_persistent_rule"]}]。
+    wiw_explicit_users_json: str = ""
+    wiw_default_priority: int = 10
+    wiw_authority_enabled: bool = True
+    # 本人偏好称呼优先于管理员以外的所有提议。
+    wiw_self_preference_first: bool = True
+    wiw_allow_whitelist_override: bool = False
+    wiw_newer_rule_wins: bool = True
+    # 共享上下文规模上限：相关消息/成员/状态条数与注入字符数。
+    wiw_max_related_messages: int = 8
+    wiw_max_related_people: int = 4
+    wiw_max_related_states: int = 6
+    wiw_max_injection_chars: int = 1600
+    # 表情包小偷（移植自 astrbot_plugin_stealer）：被动偷取群里出现的
+    # 表情包，VLM 分类后入发送库；分类端点沿用 toolbox_vision_* 配置。
+    meme_steal_enabled: bool = True
+    # probability 按概率偷；cooldown 两次偷取至少间隔 N 秒（默认，防刷）。
+    meme_steal_mode: str = "cooldown"
+    meme_steal_chance: float = 0.5
+    meme_steal_cooldown_seconds: int = 20
+    meme_steal_max_bytes: int = 3_000_000
+    # 发送库内偷取文件（steal_ 前缀）数量上限，超出按最旧淘汰；自带
+    # 表情包不带 steal_ 前缀，永不参与淘汰。
+    meme_steal_library_max: int = 300
+    meme_steal_queue_size: int = 8
+    # 发送时偷取表情包的占比：0.3 ≈ 自带:偷取 7:3（先掷来源骰子再在
+    # 对应来源内语义选图）；0 表示不区分来源，沿用全库混选。
+    meme_steal_send_ratio: float = 0.3
+    # 相册直发图片（无表情包标记的普通 image 段）是否也作为候选交给
+    # VLM 判定：判定为照片/截图/二维码会丢弃并缓存哈希不再重判。相册
+    # 直发是群里分享梗图的主要形态之一，开启后漏偷大幅减少，代价是
+    # 新照片会各消耗一次 VLM 调用（受偷取冷却限流）。
+    meme_steal_plain_images: bool = True
     # 启动期依赖服务引导：拉起 Suwayomi-Server 与 NapCat，见 runtime/service_bootstrap.py。
     bootstrap_services_enabled: bool = True
     bootstrap_suwayomi_enabled: bool = True

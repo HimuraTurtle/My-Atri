@@ -92,12 +92,18 @@ from .server_parts.helpers import (
     _singing_context_id,
 )
 
+from .server_parts.server_anima import OneBotAnimaMixin
 from .server_parts.server_bilibili import OneBotBilibiliMixin
+from .server_parts.server_avatar import OneBotAvatarMixin
 from .server_parts.server_connection import OneBotConnectionMixin
 from .server_parts.server_delivery import OneBotDeliveryMixin
 from .server_parts.server_events import OneBotEventMixin
 from .server_parts.server_manga import OneBotMangaMixin
+from .server_parts.server_meme_stealer import OneBotMemeStealMixin
+from .server_parts.server_minimax_draw import OneBotMinimaxDrawMixin
 from .server_parts.server_proactive import OneBotProactiveMixin
+from .server_parts.server_what_to_eat import OneBotWhatToEatMixin
+from .server_parts.server_who_is_who import OneBotWhoIsWhoMixin
 
 
 class OneBotServer(
@@ -105,7 +111,13 @@ class OneBotServer(
     OneBotEventMixin,
     OneBotDeliveryMixin,
     OneBotMangaMixin,
+    OneBotAnimaMixin,
+    OneBotMinimaxDrawMixin,
     OneBotBilibiliMixin,
+    OneBotAvatarMixin,
+    OneBotWhatToEatMixin,
+    OneBotWhoIsWhoMixin,
+    OneBotMemeStealMixin,
     OneBotProactiveMixin,
 ):
     """OneBot v11 的接入适配器。
@@ -143,6 +155,7 @@ async def run_server(config: Any) -> None:
         group_task = asyncio.create_task(server.group_proactive_loop())
         meme_task = asyncio.create_task(server.meme_learning_loop())
         manga_task = asyncio.create_task(server.manga_update_loop())
+        goodnight_task = asyncio.create_task(server.goodnight_loop())
         webui_server = await start_webui(config, server)
         try:
             await asyncio.Future()
@@ -154,6 +167,7 @@ async def run_server(config: Any) -> None:
             group_task.cancel()
             meme_task.cancel()
             manga_task.cancel()
+            goodnight_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_task
             with contextlib.suppress(asyncio.CancelledError):
@@ -166,6 +180,8 @@ async def run_server(config: Any) -> None:
                 await meme_task
             with contextlib.suppress(asyncio.CancelledError):
                 await manga_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await goodnight_task
             await server.shutdown()
             if getattr(server, "_manga_service", None) is not None:
                 with contextlib.suppress(Exception):

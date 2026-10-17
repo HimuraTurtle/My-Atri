@@ -2,6 +2,11 @@ from __future__ import annotations
 
 import logging
 
+from ...proactive.goodnight import (
+    goodnight_due,
+    goodnight_greeting_text,
+    mark_goodnight_sent,
+)
 from .server_support import OneBotServerMixin, _sync_server_globals
 
 # pythonw 无控制台时 sys.stdout 为 None，裸 print 会抛异常杀死进程；
@@ -72,6 +77,89 @@ class OneBotProactiveMixin(OneBotServerMixin):
                 except Exception as exc:
                     LOGGER.warning("早安问候发送失败：%s", exc)
                     break
+
+    async def goodnight_loop(self) -> None:
+        """每晚固定时间向机器人加入的所有群聊发送晚安图与晚安语句。"""
+        LOGGER.info(
+            "晚安问候循环已启动，计划时间 %s（%s）",
+            getattr(self.config, "goodnight_time", "23:30"),
+            getattr(self.config, "goodnight_timezone", "Asia/Shanghai"),
+        )
+        while True:
+            await asyncio.sleep(60)
+            if not getattr(self.config, "goodnight_enabled", True):
+                continue
+            try:
+                due = goodnight_due(
+                    getattr(self.config, "goodnight_state_path"),
+                    scheduled_time=str(getattr(self.config, "goodnight_time", "23:30")),
+                    timezone_name=str(
+                        getattr(self.config, "goodnight_timezone", "Asia/Shanghai")
+                    ),
+                    catchup_minutes=int(
+                        getattr(self.config, "goodnight_catchup_minutes", 30)
+                    ),
+                )
+            except Exception as exc:
+                LOGGER.warning("晚安问候调度跳过：%s", exc)
+                continue
+            if not due:
+                continue
+            websocket = self._first_active_websocket()
+            if websocket is None:
+                continue
+            try:
+                await self._send_goodnight_greetings(websocket)
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                LOGGER.warning("晚安问候发送失败：%s", exc)
+
+    async def _send_goodnight_greetings(self, websocket: Any) -> None:
+        groups = await self.fetch_group_list()
+        if not groups:
+            LOGGER.warning("晚安问候本轮跳过：未能读取到群列表")
+            return
+        text = goodnight_greeting_text()
+        segments: list[dict[str, Any]] = []
+        image_path = Path(str(getattr(self.config, "goodnight_image", "") or ""))
+        if str(image_path):
+            if image_path.is_file():
+                segments.extend(
+                    outgoing_to_onebot_message(
+                        OutgoingMessage("image", str(image_path))
+                    )
+                )
+            else:
+                LOGGER.warning("晚安图片缺失，本轮仅发送文字：%s", image_path)
+        segments.append({"type": "text", "data": {"text": text}})
+
+        sent = 0
+        for group in groups:
+            raw_id = str(group.get("group_id") or "").strip()
+            if not raw_id.isdigit():
+                continue
+            group_id = int(raw_id)
+            try:
+                await self.call_action(
+                    websocket,
+                    "send_group_msg",
+                    {"group_id": group_id, "message": segments},
+                )
+                self.reply_engine.record_bot_reply(f"group:{group_id}", text)
+                sent += 1
+            except Exception as exc:
+                LOGGER.warning("晚安问候发送到群 %s 失败：%s", group_id, exc)
+        if sent == 0:
+            LOGGER.warning("晚安问候全部发送失败，将在补发窗口内重试。")
+            return
+        mark_goodnight_sent(
+            getattr(self.config, "goodnight_state_path"),
+            timezone_name=str(
+                getattr(self.config, "goodnight_timezone", "Asia/Shanghai")
+            ),
+        )
+        LOGGER.info("晚安问候已发送至 %s/%s 个群聊。", sent, len(groups))
 
     async def proactive_v2_loop(self) -> None:
         while True:

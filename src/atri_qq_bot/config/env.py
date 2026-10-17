@@ -61,3 +61,16 @@ def _env_int_tuple(name: str, default: tuple[int, ...]) -> tuple[int, ...]:
             continue
         numbers.append(int(piece))
     return tuple(numbers)
+
+
+def _env_str_tuple(name: str, default: tuple[str, ...]) -> tuple[str, ...]:
+    value = os.getenv(name)
+    if not value or not value.strip():
+        return default
+
+    parts: list[str] = []
+    for piece in value.replace("，", ",").split(","):
+        piece = piece.strip()
+        if piece:
+            parts.append(piece)
+    return tuple(parts) if parts else default

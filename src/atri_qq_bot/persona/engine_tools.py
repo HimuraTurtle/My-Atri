@@ -489,7 +489,180 @@ class EngineToolsMixin(PersonaEngineMixin):
             return self.memory.recall_living_memory(conversation_id, keywords, limit)
         if name.startswith("suwayomi_"):
             return await self._execute_manga_tool(conversation_id, name, arguments, config)
+        if name == "bilibili_read":
+            return await self._execute_bilibili_read_tool(conversation_id, arguments, config)
+        if name.startswith("anima_"):
+            return await self._execute_anima_tool(conversation_id, name, arguments, config)
+        if name == "draw_image":
+            return await self._execute_minimax_draw_tool(conversation_id, arguments, config)
+        if name == "fact_check":
+            return await self._execute_fact_check_tool(arguments, config)
         return None
+
+    async def _execute_fact_check_tool(
+        self,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import asyncio
+        import json as _json
+
+        from ..isittrue import get_isittrue_service
+
+        if not bool(getattr(config, "isittrue_enabled", False)):
+            return "事实核查功能未启用，请凭已有知识谨慎回答并注明不确定。"
+        service = get_isittrue_service(config)
+        if service is None:
+            return "事实核查功能未启用，请凭已有知识谨慎回答并注明不确定。"
+        claim = str(arguments.get("claim") or "").strip()
+        if not claim:
+            return "claim 为空。请提供待核查的原始说法后重新调用。"
+        timeout = max(
+            30.0, float(getattr(config, "isittrue_timeout_seconds", 120.0) or 120.0)
+        )
+        try:
+            data = await asyncio.wait_for(service.fact_check(claim), timeout=timeout)
+        except asyncio.TimeoutError:
+            return (
+                "事实核查执行超时。不要编造核查结论，"
+                "可建议用户稍后再问一次。"
+            )
+        except Exception as exc:
+            return f"事实核查执行失败：{exc}。不要编造核查结论。"
+        return _json.dumps(data, ensure_ascii=False)
+
+    async def _execute_minimax_draw_tool(
+        self,
+        conversation_id: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import asyncio
+        import json as _json
+
+        from ..minimax_draw import get_minimax_draw_service
+
+        if not bool(getattr(config, "minimax_draw_enabled", False)):
+            return "绘画功能未启用，请直接用文字自然回复。"
+        service = get_minimax_draw_service(config)
+        if service is None:
+            return "绘画功能未启用，请直接用文字自然回复。"
+        prompt = str(arguments.get("prompt") or "").strip()
+        if not prompt:
+            return "prompt 为空。请提供想要画的画面描述后重新调用。"
+        timeout = max(
+            30.0, float(getattr(config, "minimax_timeout_seconds", 120.0) or 120.0)
+        )
+        try:
+            data = await asyncio.wait_for(
+                service.tool_draw(
+                    conversation_id=conversation_id,
+                    prompt=prompt,
+                    aspect_ratio=str(arguments.get("aspect_ratio") or ""),
+                    style=str(arguments.get("style") or ""),
+                ),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return (
+                "绘图工具执行超时（生成仍在排队或进行中）。不要编造结果，"
+                "可建议用户稍后再试。"
+            )
+        except Exception as exc:
+            return f"绘图工具执行失败：{exc}。不要编造结果。"
+        return _json.dumps(data, ensure_ascii=False)
+
+    async def _execute_anima_tool(
+        self,
+        conversation_id: str,
+        name: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import asyncio
+        import json as _json
+
+        from ..anima import get_anima_service
+
+        if not bool(getattr(config, "anima_enabled", False)):
+            return "绘画助手未启用，请直接用文字自然回复。"
+        service = get_anima_service(config)
+        if service is None:
+            return "绘画助手未启用，请直接用文字自然回复。"
+
+        timeout = max(
+            60.0, float(getattr(config, "anima_tool_timeout_seconds", 420.0) or 420.0)
+        )
+        try:
+            if name == "anima_draw":
+                prompt = str(arguments.get("prompt") or "").strip()
+                if not prompt:
+                    return "prompt 为空。请提供想要画的画面描述后重新调用。"
+
+                def _optional_int(key: str) -> int | None:
+                    value = arguments.get(key)
+                    if value is None:
+                        return None
+                    try:
+                        return int(value)
+                    except (TypeError, ValueError):
+                        return None
+
+                data = await asyncio.wait_for(
+                    service.tool_generate(
+                        conversation_id,
+                        prompt,
+                        width=_optional_int("width"),
+                        height=_optional_int("height"),
+                    ),
+                    timeout=timeout,
+                )
+            elif name == "anima_status":
+                text = await asyncio.wait_for(service.tool_status(), timeout=30.0)
+                return str(text or "绘图服务状态未知。")
+            else:
+                return f"未知绘画工具：{name}。不要编造结果。"
+        except asyncio.TimeoutError:
+            return (
+                "绘图工具执行超时（可能仍在排队或生成中）。不要编造结果，"
+                "可建议用户稍后再试或用 anima_status 检查服务状态。"
+            )
+        except Exception as exc:
+            return f"绘图工具执行失败：{exc}。不要编造结果。"
+        return _json.dumps(data, ensure_ascii=False)
+
+    async def _execute_bilibili_read_tool(
+        self,
+        conversation_id: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import asyncio
+        import json as _json
+
+        from ..bilibili import get_bilibili_service
+
+        if not bool(getattr(config, "bilibili_enabled", True)):
+            return "B站助手未启用，请直接用文字自然回复。"
+        service = get_bilibili_service(config)
+
+        timeout = max(
+            10.0,
+            float(getattr(config, "bilibili_ai_tool_timeout_seconds", 150.0) or 150.0),
+        )
+        try:
+            data = await asyncio.wait_for(
+                service.tool_read_video(conversation_id, str(arguments.get("video") or "")),
+                timeout=timeout,
+            )
+        except asyncio.TimeoutError:
+            return (
+                "B站视频读取超时（可能正在转写音频）。不要编造视频内容，"
+                "可建议用户稍后再试或使用「B站总结」命令。"
+            )
+        except Exception as exc:
+            return f"B站工具执行失败：{exc}。不要编造结果。"
+        return _json.dumps(data, ensure_ascii=False)
 
     async def _execute_manga_tool(
         self,

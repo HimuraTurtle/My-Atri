@@ -70,10 +70,10 @@ def _should_reuse_cached_visual(event: dict[str, Any], text: str) -> bool:
 def _personal_event_message(event: dict[str, Any]) -> str:
     title = str(event.get("title") or "今天的重要安排").strip()
     if event.get("kind") == "birthday":
-        return "生日快乐！今天是你的重要日子。高性能亚托莉记得，也希望你今天能被认真地祝福。"
+        return "生日快乐！今天是你的重要日子，高性能的亚托莉可是一直记着的。希望你能收到好多认真的祝福♪"
     if len(title) > 72:
         title = title[:72].rstrip("，,：:；;")
-    return f"提醒你一下：你之前提到“{title}”。时间到了，先确认要带的东西和下一步，别让重要安排被忙乱挤掉。"
+    return f"提醒你一下：你之前提到“{title}”。时间到啦，要带什么、下一步做什么，可以先跟亚托莉过一遍，别让重要安排被忙乱挤掉~"
 
 
 def _pending_visual_key(event: dict[str, Any]) -> str:

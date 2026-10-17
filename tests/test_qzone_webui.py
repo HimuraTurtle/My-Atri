@@ -87,8 +87,11 @@ def test_qzone_admin_reads_and_normalizes_selected_users_feeds() -> None:
     )
     result = admin.feeds("10001", 10)
 
-    assert calls[0][0] == "get_emotion_list"
-    assert calls[0][1]["user_id"] == 10001
+    # get_emotion_list 在会话刷新后可能返回空页，Bridge 现用
+    # get_feeds_html_act_all + feed_owner 直读好友空间。
+    assert calls[0][0] == "get_feeds_html_act_all"
+    assert calls[0][1]["user_id"] == "10001"
+    assert calls[0][1]["feed_owner"] == "10001"
     assert result["feeds"][0]["tid"] == "feed-1"
     assert result["feeds"][0]["content"] == "今天天气很好"
     assert result["feeds"][0]["comment_count"] == 1
@@ -118,14 +121,22 @@ def test_qzone_admin_sends_manual_like_and_comment_actions() -> None:
     ]
 
 
-def test_qzone_admin_rejects_users_not_in_memory_panel() -> None:
+def test_qzone_admin_accepts_manual_users_but_rejects_invalid_qq() -> None:
     admin = QZoneAdmin(
         memory_payload(),
         QZoneBridgeClient(enabled_settings(), requester=lambda *_: {}),
     )
 
-    with pytest.raises(ValueError, match="记忆面板"):
-        admin.feeds("99999")
+    known = admin.feeds("10001", 1)
+    assert known["user"]["affection_label"] == "熟悉"
+
+    # 记忆面板外的合法 QQ 号作为“手动添加”用户放行，供手动浏览好友空间。
+    manual = admin.feeds("99999", 1)
+    assert manual["user"]["user_id"] == "99999"
+    assert manual["user"]["affection_label"] == "手动添加"
+
+    with pytest.raises(ValueError, match="QQ 号无效"):
+        admin.feeds("not-a-qq")
 
 
 def test_qzone_bridge_rejects_non_loopback_urls() -> None:
@@ -167,9 +178,10 @@ def test_qzone_feed_normalizer_does_not_expose_raw_image_data() -> None:
 def test_webui_contains_manual_qzone_controls() -> None:
     html = render_index()
 
-    assert "onclick=\"showTab(event,'qzone')\"" in html
-    assert 'id="qzoneUser"' in html
+    # QQ 空间手动互动已并入用户中心面板，不再有独立 qzone 标签页。
+    assert "onclick=\"showTab(event,'users')\"" in html
     assert "/api/qzone/feeds" in html
     assert "/api/qzone/like" in html
     assert "/api/qzone/comment" in html
-    assert "确认并发布评论" in html
+    assert "点赞这条动态" in html
+    assert "发表生成评论" in html

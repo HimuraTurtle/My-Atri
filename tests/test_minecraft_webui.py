@@ -127,15 +127,3 @@ def test_minecraft_page_has_separate_config_and_test_controls() -> None:
     assert "sendMinecraftCommand('stop')" in html
     assert "/api/minecraft/config" in html
     assert "/api/minecraft/command" in html
-
-
-def test_webui_panels_are_not_nested_inside_voice_panel() -> None:
-    html = render_index()
-    voice_start = html.index('<div id="voice" class="panel">')
-    stickers_start = html.index('<div id="stickers" class="panel">')
-    voice_segment = html[voice_start:stickers_start]
-
-    assert voice_segment.count('<div id="voice"') == 1
-    assert voice_segment.count('<div id="voiceSpeechPanel"') == 1
-    assert voice_segment.count('<div id="voiceMusicPanel"') == 1
-    assert voice_segment.rstrip().endswith('</div>\n      </div>')

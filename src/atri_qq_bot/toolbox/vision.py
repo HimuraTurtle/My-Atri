@@ -155,10 +155,16 @@ class ToolboxVisionMixin(ToolboxMixin):
         image_ref: _SegmentRef | None = None,
         vision_prompt: str | None = None,
     ) -> ToolAnalysisResult:
+        pipeline_started = time.perf_counter()
         info = _image_info(data)
         kind_hint = visual_kind if visual_kind in {"image", "sticker"} else _classify_visual_material(data, source, image_ref)
         prompt = vision_prompt or _visual_prompt_for_kind(kind_hint)
+        saucenao_key = str(getattr(self.config, "saucenao_api_key", "") or "")
+        animetrace_enabled = bool(getattr(self.config, "animetrace_enabled", True))
+
+        ocr_started = time.perf_counter()
         ocr_result = await self._extract_image_ocr(data)
+        ocr_seconds = time.perf_counter() - ocr_started
         if ocr_result.text:
             prompt += (
                 "\n\n独立 OCR 结果（文字证据）：\n"
@@ -167,7 +173,30 @@ class ToolboxVisionMixin(ToolboxMixin):
                 "图中文字必须以这份独立 OCR 结果为优先证据；"
                 "可纠正明显断行，但不得改写、补字或凭空增加文字。"
             )
-        vision_text, vision_limitation = await self._analyze_image_with_vision(data, source, prompt)
+
+        # 静态图片（image/auto）的以图搜图与视觉模型并行：帧级证据不依赖视觉
+        # 输出的措辞，还能省掉串行等待；表情包/GIF 体量大且帧匹配命中率低，
+        # 保持视觉完成后再按启发式触发，省匿名配额。
+        reverse_triggered = kind_hint in {"image", "auto"}
+        reverse_started = 0.0
+        reverse_seconds = 0.0
+        reverse_task: asyncio.Task | None = None
+        if reverse_triggered:
+            reverse_started = time.perf_counter()
+            reverse_task = asyncio.create_task(
+                reverse_image_search(data, saucenao_key, animetrace_enabled)
+            )
+        try:
+            vision_started = time.perf_counter()
+            vision_text, vision_limitation = await self._analyze_image_with_vision(data, source, prompt)
+        except BaseException:
+            if reverse_task is not None:
+                reverse_task.cancel()
+                with contextlib.suppress(BaseException):
+                    await reverse_task
+            raise
+        vision_seconds = time.perf_counter() - vision_started
+
         vision_text = _sanitize_vision_text(vision_text)
         if not vision_text:
             LOGGER.warning(
@@ -181,29 +210,38 @@ class ToolboxVisionMixin(ToolboxMixin):
                 vision_text,
                 _shorten(ocr_result.text, 1200),
             )
-        reverse_findings: list[str] = []
-        reverse_context = " ".join(
-            part
-            for part in (vision_text, ocr_result.text, str(prompt or ""), str(source))
-            if part
-        )
-        if not vision_text or _looks_like_anime_material(reverse_context):
+
+        hits: list[ReverseSearchHit] = []
+        if reverse_task is not None:
             try:
-                reverse_findings = await reverse_image_findings(data)
+                hits = await reverse_task
             except Exception as exc:
                 LOGGER.warning("反向搜图失败：%s", _exception_summary(exc))
-            if reverse_findings:
-                LOGGER.info(
-                    "反向搜图命中：size=%d bytes findings=%d",
-                    len(data),
-                    len(reverse_findings),
-                )
-        saucenao_key = str(getattr(self.config, "saucenao_api_key", "") or "")
-        if saucenao_key and (not vision_text or _looks_like_anime_material(reverse_context)):
-            try:
-                reverse_findings.extend(await saucenao_findings(data, saucenao_key))
-            except Exception as exc:
-                LOGGER.warning("SauceNAO 搜图失败：%s", _exception_summary(exc))
+            reverse_seconds = time.perf_counter() - reverse_started
+        else:
+            reverse_context = " ".join(
+                part
+                for part in (vision_text, ocr_result.text, str(source))
+                if part
+            )
+            if not vision_text or _looks_like_anime_material(reverse_context):
+                reverse_triggered = True
+                reverse_started = time.perf_counter()
+                try:
+                    hits = await reverse_image_search(data, saucenao_key, animetrace_enabled)
+                except Exception as exc:
+                    LOGGER.warning("反向搜图失败：%s", _exception_summary(exc))
+                reverse_seconds = time.perf_counter() - reverse_started
+        if hits:
+            best_hit = max(hits, key=lambda hit: hit.similarity)
+            LOGGER.info(
+                "反向搜图命中：size=%d bytes provider=%s best=%.0f%%",
+                len(data),
+                best_hit.provider,
+                best_hit.similarity,
+            )
+
+        adjudication_finding, vision_text = _adjudicate_reverse_identity(vision_text, hits)
         resolved_kind = kind_hint
         if resolved_kind == "auto":
             resolved_kind = _visual_kind_from_analysis(vision_text) or _fallback_visual_kind(data, source, image_ref)
@@ -230,8 +268,42 @@ class ToolboxVisionMixin(ToolboxMixin):
             limitations.append(
                 f"独立 OCR 暂不可用：{_shorten(ocr_result.error, 240)}"
             )
-        findings.extend(reverse_findings)
-        reverse_rescue = bool(reverse_findings) and not vision_text
+        findings.extend(hit.finding_text() for hit in hits)
+        if adjudication_finding:
+            findings.append(adjudication_finding)
+
+        # 状态语义：visual_status 只反映视觉模型结果，反搜证据通过
+        # visual_reverse_hit / visual_fallback_available 单独表达，
+        # 不再把视觉失败覆盖成 verified。
+        vision_ok = bool(vision_text)
+        reverse_hit = bool(hits)
+        reverse_rescue = reverse_hit and not vision_ok
+        visual_status = (
+            "verified"
+            if vision_ok
+            else "reverse_only"
+            if reverse_hit
+            else "ocr_only"
+            if ocr_result.text
+            else "unavailable"
+        )
+        self._log_vision_pipeline_event(
+            source=source,
+            data=data,
+            kind=resolved_kind,
+            ocr_result=ocr_result,
+            hits=hits,
+            reverse_triggered=reverse_triggered,
+            adjudicated=bool(adjudication_finding),
+            vision_ok=vision_ok,
+            final_status=visual_status,
+            stages={
+                "ocr": ocr_seconds,
+                "vision": vision_seconds,
+                "reverse": reverse_seconds,
+                "total": time.perf_counter() - pipeline_started,
+            },
+        )
         return ToolAnalysisResult(
             "日常生活乐趣",
             "抽象有趣",
@@ -240,7 +312,7 @@ class ToolboxVisionMixin(ToolboxMixin):
             limitations,
             read_level=(
                 "full_content"
-                if vision_text or reverse_rescue
+                if vision_ok or reverse_rescue
                 else "partial_content"
                 if ocr_result.text
                 else "metadata_only"
@@ -248,14 +320,9 @@ class ToolboxVisionMixin(ToolboxMixin):
             visual_data=data,
             visual_source=source,
             visual_kind=resolved_kind,
-            visual_status=(
-                "verified"
-                if vision_text or reverse_rescue
-                else "ocr_only"
-                if ocr_result.text
-                else "unavailable"
-            ),
+            visual_status=visual_status,
             visual_fallback_available=reverse_rescue,
+            visual_reverse_hit=reverse_hit,
             visual_ocr_confidence=ocr_result.average_confidence,
         )
 
@@ -558,7 +625,9 @@ class ToolboxVisionMixin(ToolboxMixin):
                 },
             ],
             "temperature": 0.1,
-            "max_tokens": 480,
+            # 结构化 JSON 十字段输出偶尔冲高；480 上限曾把 completion 直接
+            # 截断（finish_reason=length → 2 次 JSON 解析失败），放宽到 2000。
+            "max_tokens": 2000,
         }
         active_model = str(model or self.vision_model).casefold()
         active_base_url = str(base_url or self.vision_base_url).casefold()
@@ -570,9 +639,8 @@ class ToolboxVisionMixin(ToolboxMixin):
             and active_model
             in {"deepseek-flash", "deepseek-v4-flash", "deepseek-v4-pro"}
         ):
-            # GLM-4.6V 与 DeepSeek V4 系列默认开思考链。短视觉输出上限仅
-            # 480 token，思考链会把额度耗尽导致正文为空；关闭后额度用于
-            # 可见结果（DeepSeek 冒烟实测 completion_tokens=19 纯正文）。
+            # GLM-4.6V 与 DeepSeek V4 系列默认开思考链。思考链会优先消耗
+            # 输出额度，短上限时正文为空；关闭后额度全部用于可见结果。
             payload["thinking"] = {"type": "disabled"}
         headers = {"Authorization": f"Bearer {self.vision_api_key or 'ollama'}"}
         async with httpx.AsyncClient(
@@ -585,14 +653,14 @@ class ToolboxVisionMixin(ToolboxMixin):
             )
             response.raise_for_status()
             body = response.json()
-        content = (
-            ((body.get("choices") or [{}])[0].get("message") or {}).get("content")
-            or ""
-        ).strip()
+        choices = body.get("choices") or [{}]
+        content = ((choices[0].get("message") or {}).get("content") or "").strip()
         return _VisionModelResponse(
             content,
             {
                 "provider": "openai-compatible",
+                # finish_reason=length 用于截断检测重试（Ollama 对应 done_reason）。
+                "finish_reason": str(choices[0].get("finish_reason") or ""),
                 "usage": body.get("usage") if isinstance(body.get("usage"), dict) else {},
             },
         )
@@ -619,7 +687,7 @@ class ToolboxVisionMixin(ToolboxMixin):
             "format": VISUAL_RESPONSE_SCHEMA,
             "options": {
                 "temperature": 0.1,
-                "num_predict": 320,
+                "num_predict": 800,
                 "num_ctx": 4096,
             },
         }
@@ -772,6 +840,58 @@ class ToolboxVisionMixin(ToolboxMixin):
                 "cleaned_output": _shorten(cleaned_output, 3000),
                 "metrics": metrics or {},
                 "error": _shorten(error, 500),
+            }
+            self._vision_event_log.parent.mkdir(parents=True, exist_ok=True)
+            with self._vision_event_log.open("a", encoding="utf-8") as file:
+                file.write(json.dumps(payload, ensure_ascii=False) + "\n")
+
+    def _log_vision_pipeline_event(
+        self,
+        *,
+        source: str,
+        data: bytes,
+        kind: str,
+        ocr_result: OcrExtraction,
+        hits: list[ReverseSearchHit],
+        reverse_triggered: bool,
+        adjudicated: bool,
+        vision_ok: bool,
+        final_status: str,
+        stages: dict[str, float],
+    ) -> None:
+        """单张图片整条流水线的汇总事件：OCR/反搜/身份裁决与分阶段耗时。
+
+        与逐模型事件共用 image_id（原始字节 sha256 前 16 位），可按需关联；
+        诊断身份确认率、反搜触发率时直接聚合本事件即可，无需再从
+        cleaned_output 反推。
+        """
+        with contextlib.suppress(Exception):
+            best = max(hits, key=lambda hit: hit.similarity) if hits else None
+            payload = {
+                "time": time.strftime("%Y-%m-%d %H:%M:%S"),
+                "image_id": hashlib.sha256(data).hexdigest()[:16],
+                "source": _basename_from_ref(source) or "image",
+                "status": "pipeline",
+                "kind": kind,
+                "final_visual_status": final_status,
+                "vision_ok": vision_ok,
+                "ocr": {
+                    "chars": len(ocr_result.text or ""),
+                    "confidence": round(float(ocr_result.average_confidence or 0.0), 3),
+                    "error": _shorten(ocr_result.error or "", 160),
+                },
+                "reverse": {
+                    "triggered": reverse_triggered,
+                    "hits": len(hits),
+                    "provider": best.provider if best else "",
+                    "best_similarity": round(best.similarity, 1) if best else None,
+                    "best_title": _shorten(best.title, 80) if best else "",
+                },
+                "identity_adjudicated": adjudicated,
+                "stage_ms": {
+                    name: round(max(0.0, seconds) * 1000)
+                    for name, seconds in (stages or {}).items()
+                },
             }
             self._vision_event_log.parent.mkdir(parents=True, exist_ok=True)
             with self._vision_event_log.open("a", encoding="utf-8") as file:

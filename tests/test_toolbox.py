@@ -15,14 +15,18 @@ from atri_qq_bot.runtime.inference_lock import _InterprocessFileLock
 import atri_qq_bot.toolbox as toolbox_module
 from atri_qq_bot.toolbox_parts import ocr as ocr_module
 from atri_qq_bot.toolbox import (
+    ReverseSearchHit,
     ToolAnalysisResult,
     ToolAnalyzer,
     _VisionModelResponse,
     _demote_unverified_visual_identity,
+    _looks_like_anime_material,
     _prepare_images_for_vision,
     _search_result_supports_query,
     _visual_prompt_for_kind,
+    _visual_response_failure_reason,
     _visual_search_query,
+    reverse_image_search as _reverse_image_search_impl,
 )
 
 
@@ -298,6 +302,229 @@ def test_analyze_propagates_visual_failure_status(monkeypatch, tmp_path) -> None
     assert context is not None
     assert context.visual_status == "unavailable"
     assert context.requires_visual_fail_safe()
+
+
+def _confident_tracemoe_hit(similarity: float = 92.0, confident: bool = True) -> ReverseSearchHit:
+    return ReverseSearchHit(
+        provider="trace.moe",
+        title="葬送的芙莉莲",
+        episode="第1话",
+        similarity=similarity,
+        confident=confident,
+        detail="Sousou no Frieren",
+    )
+
+
+def test_reverse_hit_does_not_overwrite_vision_failure_status(monkeypatch, tmp_path) -> None:
+    from PIL import Image
+    import io
+
+    source = io.BytesIO()
+    Image.new("RGB", (1024, 768), "white").save(source, format="PNG")
+    analyzer = ToolAnalyzer(_config(tmp_path))
+
+    async def failed_vision(data: bytes, source_name: str, prompt: str | None = None):
+        return "", "视觉模型没有返回可用图片分析。"
+
+    async def fake_reverse(data: bytes, saucenao_key: str = "", animetrace_enabled: bool = True) -> list:
+        return [_confident_tracemoe_hit()]
+
+    monkeypatch.setattr(analyzer, "_analyze_image_with_vision", failed_vision)
+    monkeypatch.setattr("atri_qq_bot.toolbox.reverse_image_search", fake_reverse)
+
+    result = asyncio.run(analyzer._analyze_image_bytes(source.getvalue(), "anime.png"))
+
+    # 反搜命中不再把视觉失败伪装成 verified；证据边界独立表达。
+    assert result.visual_status == "reverse_only"
+    assert result.visual_reverse_hit is True
+    assert result.visual_fallback_available is True
+    assert not result.requires_visual_fail_safe()
+    assert result.read_level == "full_content"
+    assert "葬送的芙莉莲" in result.prompt_context()
+
+
+def test_image_kind_runs_reverse_search_and_adjudicates_identity(monkeypatch, tmp_path) -> None:
+    from PIL import Image
+    import io
+
+    source = io.BytesIO()
+    Image.new("RGB", (1024, 768), "white").save(source, format="PNG")
+    analyzer = ToolAnalyzer(_config(tmp_path))
+
+    async def fake_vision(data: bytes, source_name: str, prompt: str | None = None):
+        return (
+            "直接回答：动画截图；图中文字：无明显文字；人物/主体：白发精灵少女；"
+            "身份/出处：未确认；表情/情绪：平静；表达含义/社交意图：分享画面；"
+            "依据：画面特征；置信度：低；需要联网核验：是；检索关键词：白发精灵少女",
+            "",
+        )
+
+    reverse_calls: list[bytes] = []
+
+    async def fake_reverse(data: bytes, saucenao_key: str = "", animetrace_enabled: bool = True) -> list:
+        reverse_calls.append(data)
+        return [_confident_tracemoe_hit()]
+
+    monkeypatch.setattr(analyzer, "_analyze_image_with_vision", fake_vision)
+    monkeypatch.setattr("atri_qq_bot.toolbox.reverse_image_search", fake_reverse)
+
+    result = asyncio.run(analyzer._analyze_image_bytes(source.getvalue(), "anime.png"))
+
+    assert reverse_calls == [source.getvalue()]
+    prompt = result.prompt_context()
+    # 帧级命中把身份从未确认升格为确认，并关闭联网核验回路。
+    assert "身份裁决" in prompt
+    assert "《葬送的芙莉莲》第1话画面" in prompt
+    assert "需要联网核验：否" in prompt
+    assert "置信度：高" in prompt
+    assert result.visual_status == "verified"
+    assert result.visual_reverse_hit is True
+    assert not _visual_search_query("\n".join(result.findings))
+
+
+def test_hint_level_reverse_match_stays_reference_clue(monkeypatch, tmp_path) -> None:
+    from PIL import Image
+    import io
+
+    source = io.BytesIO()
+    Image.new("RGB", (1024, 768), "white").save(source, format="PNG")
+    analyzer = ToolAnalyzer(_config(tmp_path))
+
+    async def fake_vision(data: bytes, source_name: str, prompt: str | None = None):
+        return (
+            "直接回答：像动画画面；图中文字：无明显文字；人物/主体：白发少女；"
+            "身份/出处：未确认；表情/情绪：平静；表达含义/社交意图：分享画面；"
+            "依据：画面特征；置信度：低；需要联网核验：否；检索关键词：",
+            "",
+        )
+
+    async def fake_reverse(data: bytes, saucenao_key: str = "", animetrace_enabled: bool = True) -> list:
+        return [_confident_tracemoe_hit(similarity=79.0, confident=False)]
+
+    monkeypatch.setattr(analyzer, "_analyze_image_with_vision", fake_vision)
+    monkeypatch.setattr("atri_qq_bot.toolbox.reverse_image_search", fake_reverse)
+
+    result = asyncio.run(analyzer._analyze_image_bytes(source.getvalue(), "anime.png"))
+
+    prompt = result.prompt_context()
+    # 75-85% 线索级命中只作参考，不改写身份、不裁决。
+    assert "仅作参考线索" in prompt
+    assert "身份裁决" not in prompt
+    assert "身份/出处：未确认" in prompt
+    assert result.visual_status == "verified"
+    assert result.visual_reverse_hit is True
+
+
+def test_reverse_search_gate_ignores_prompt_boilerplate_and_field_labels() -> None:
+    # 反幻觉样板与结构化字段标签不能触发反搜，否则门控永远为真。
+    assert not _looks_like_anime_material(
+        "直接回答：一只猫在睡觉；图中文字：无明显文字；人物/主体：猫；"
+        "身份/出处：未确认；置信度：低；需要联网核验：否"
+    )
+    assert _looks_like_anime_material("这是哪个角色？看着眼熟")
+    assert _looks_like_anime_material("动漫风格的少女，画风像日漫")
+
+
+def test_truncated_cloud_output_detected_by_finish_reason() -> None:
+    incomplete = "直接回答：这是一张很长的动画截图，里面有"
+    assert (
+        _visual_response_failure_reason(
+            '{"direct_answer": "这是一张很长的动画截图',
+            incomplete,
+            {"finish_reason": "length"},
+        )
+        == "truncated_output"
+    )
+    complete = (
+        "直接回答：这是菜单截图；图中文字：启动；人物/主体：菜单；身份/出处：未确认；"
+        "表情/情绪：中性；表达含义/社交意图：操作；依据：文字；置信度：高；"
+        "需要联网核验：否；检索关键词："
+    )
+    assert (
+        _visual_response_failure_reason(
+            "完整分析文本",
+            complete,
+            {"finish_reason": "length"},
+        )
+        == ""
+    )
+
+
+def test_reverse_image_search_falls_back_to_saucenao_when_configured(monkeypatch) -> None:
+    from atri_qq_bot.toolbox import helpers as toolbox_helpers
+
+    async def no_tracemoe(data: bytes) -> list:
+        return []
+
+    async def fake_saucenao(data: bytes, api_key: str) -> list:
+        assert api_key == "test-key"
+        return [
+            ReverseSearchHit(
+                provider="saucenao",
+                title="pixiv:123456",
+                characters="亚托莉",
+                similarity=88.0,
+                confident=True,
+                detail="Index #5: Pixiv Images",
+            )
+        ]
+
+    monkeypatch.setattr(toolbox_helpers, "_tracemoe_hits", no_tracemoe)
+    monkeypatch.setattr(toolbox_helpers, "_saucenao_hits", fake_saucenao)
+
+    # 直接用导入期捕获的真实实现：ToolboxMixin 的全局同步会把包级
+    # monkeypatch（conftest 的空结果 mock）回写进 helpers 命名空间。
+    hits = asyncio.run(_reverse_image_search_impl(b"unique-image-bytes", "test-key"))
+
+    assert hits and hits[0].provider == "saucenao"
+    assert "亚托莉" in hits[0].finding_text()
+    assert "反向搜图（SauceNAO）" in hits[0].finding_text()
+
+
+def test_pipeline_event_logs_stage_timings_and_reverse_summary(monkeypatch, tmp_path) -> None:
+    from PIL import Image
+    import io
+
+    source = io.BytesIO()
+    Image.new("RGB", (1024, 768), "white").save(source, format="PNG")
+    analyzer = ToolAnalyzer(_config(tmp_path))
+    analyzer._vision_event_log = tmp_path / "vision-events.jsonl"
+
+    async def fake_vision(data: bytes, source_name: str, prompt: str | None = None):
+        return (
+            "直接回答：动画截图；图中文字：无明显文字；人物/主体：白发少女；"
+            "身份/出处：未确认；表情/情绪：平静；表达含义/社交意图：分享画面；"
+            "依据：画面特征；置信度：低；需要联网核验：否；检索关键词：",
+            "",
+        )
+
+    async def fake_reverse(data: bytes, saucenao_key: str = "", animetrace_enabled: bool = True) -> list:
+        return [_confident_tracemoe_hit()]
+
+    monkeypatch.setattr(analyzer, "_analyze_image_with_vision", fake_vision)
+    monkeypatch.setattr("atri_qq_bot.toolbox.reverse_image_search", fake_reverse)
+
+    asyncio.run(analyzer._analyze_image_bytes(source.getvalue(), "anime.png"))
+
+    events = [
+        json.loads(line)
+        for line in (tmp_path / "vision-events.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    pipeline_events = [event for event in events if event.get("status") == "pipeline"]
+    assert pipeline_events
+    event = pipeline_events[-1]
+    assert event["reverse"] == {
+        "triggered": True,
+        "hits": 1,
+        "provider": "trace.moe",
+        "best_similarity": 92.0,
+        "best_title": "葬送的芙莉莲",
+    }
+    assert event["identity_adjudicated"] is True
+    assert event["final_visual_status"] == "verified"
+    assert event["vision_ok"] is True
+    assert set(event["stage_ms"]) == {"ocr", "vision", "reverse", "total"}
+    assert event["ocr"]["chars"] == 0 or isinstance(event["ocr"]["chars"], int)
 
 
 def test_toolbox_routes_mface_image_to_sticker_emotion_analysis(monkeypatch, tmp_path) -> None:
@@ -633,10 +860,19 @@ def test_ollama_vision_switches_to_fallback_model_after_resource_failure(
     async def no_op(*args, **kwargs) -> None:
         return None
 
+    async def fake_ensure(*, timeout_seconds: float) -> bool:
+        return True
+
     monkeypatch.setattr(
         toolbox_module,
         "inference_resource_lease",
         fake_lease,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        toolbox_module,
+        "ensure_ollama_service",
+        fake_ensure,
         raising=False,
     )
     monkeypatch.setattr(analyzer, "_analyze_image_with_ollama_native", fake_native)
@@ -870,10 +1106,19 @@ def test_ollama_vision_switches_to_fallback_after_empty_truncated_output(
     async def no_op(*args, **kwargs) -> None:
         return None
 
+    async def fake_ensure(*, timeout_seconds: float) -> bool:
+        return True
+
     monkeypatch.setattr(
         toolbox_module,
         "inference_resource_lease",
         fake_lease,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        toolbox_module,
+        "ensure_ollama_service",
+        fake_ensure,
         raising=False,
     )
     monkeypatch.setattr(analyzer, "_analyze_image_with_ollama_native", fake_native)
@@ -942,7 +1187,10 @@ def test_reply_engine_bypasses_chat_model_when_visual_evidence_is_unavailable(
         )
     )
 
-    assert reply == ""
+    # 识别失败不再静默返回空串，改为诚实安抚文本；聊天模型仍被绕过
+    # （must_not_call_model 一旦被调用就会让测试直接失败）。
+    assert "没识别稳定" in reply
+    assert "不敢乱猜" in reply
 
 
 def test_vision_releases_stale_ollama_models_before_loading(monkeypatch, tmp_path) -> None:

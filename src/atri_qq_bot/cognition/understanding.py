@@ -93,6 +93,16 @@ def _action_domain(
 ) -> str:
     """用少量能力领域替代不断膨胀的业务意图标签。"""
 
+    # 画图请求要在“图片”检查之前判断：如“画一张图片”含“图片”，
+    # 否则会被误判为 vision.understand（看图）。
+    if any(
+        term in text
+        for term in (
+            "帮我画", "给我画", "画一张", "画一", "画个", "画幅", "画张",
+            "来一张", "画图", "生成图", "生成一张", "画个图",
+        )
+    ):
+        return "image.generate"
     if any(term in text for term in ("唱", "歌曲", "来一首", "换一首", "下一首")):
         return "music.sing"
     if any(term in text for term in ("图片", "图里", "表情包", "视频", "画面", "这是谁")):

@@ -109,9 +109,10 @@ class OneBotBilibiliMixin(OneBotServerMixin):
 
     @staticmethod
     def _bilibili_is_summary_command(plain_text: str) -> bool:
+        from ...bilibili.parsing import strip_address_prefix
         from ...bilibili.service import SUMMARY_PREFIXES
 
-        stripped = (plain_text or "").strip()
+        stripped = strip_address_prefix(plain_text)
         return any(stripped.startswith(prefix) for prefix in SUMMARY_PREFIXES)
 
     async def _send_bilibili_text(self, websocket: Any, event: dict[str, Any], text: str) -> None:

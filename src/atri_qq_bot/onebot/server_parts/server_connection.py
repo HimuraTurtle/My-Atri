@@ -31,6 +31,7 @@ class OneBotConnectionMixin(OneBotServerMixin):
             config.sticker_dir,
             config.sticker_trigger_file,
             config.sticker_capture_dir,
+            steal_send_ratio=getattr(config, "meme_steal_send_ratio", 0.0),
         )
         self.tools = ToolAnalyzer(config)
         self._active_websockets: set[Any] = set()
@@ -114,8 +115,10 @@ class OneBotConnectionMixin(OneBotServerMixin):
                 future.cancel()
         self._pending_actions.clear()
         self._message_tasks.clear()
-        self._conversation_workers.clear()
         self._conversation_queues.clear()
+        self._conversation_workers.clear()
+        with contextlib.suppress(Exception):
+            await self.shutdown_meme_stealer()
         LOGGER.info("OneBot 消息调度已清理：tasks=%s", len(tasks))
 
     async def probe_onebot_status(self, websocket: Any) -> bool:

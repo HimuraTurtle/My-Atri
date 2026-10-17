@@ -30,6 +30,9 @@ class ToolAnalysisResult:
     visual_kind: str = ""
     visual_status: str = ""
     visual_ocr_confidence: float = 0.0
+    # 以图搜图拿到任何达线索阈值的命中（无论视觉模型是否成功）。
+    # visual_status 只描述视觉模型本身的结果；反搜证据不再把失败状态覆盖成 verified。
+    visual_reverse_hit: bool = False
     # 视频降级链路提供了可引用的 OCR 或标题时，允许交给对话模型继续回答。
     # 图片视觉失败不设置此标记，继续保持原有的防幻觉静默保护。
     visual_fallback_available: bool = False
@@ -39,7 +42,8 @@ class ToolAnalysisResult:
     def requires_visual_fail_safe(self) -> bool:
         return bool(
             self.visual_kind
-            and self.visual_status in {"partial", "ocr_only", "metadata_only", "unavailable"}
+            and self.visual_status
+            in {"partial", "ocr_only", "reverse_only", "metadata_only", "unavailable"}
             and not self.visual_fallback_available
         )
 
