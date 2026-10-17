@@ -233,6 +233,65 @@ async function publishDirectoryAtriPostCore() {
   try { const result=await api('/api/qzone/automation/publish-generated',{method:'POST',body:JSON.stringify({prompt:$('directoryQzonePostPrompt')?.value.trim()||'',model_profile_id:window._qzoneAutomation?.settings?.post_model_profile_id||''})}); toast(result.ok?'亚托莉动态已生成并发布':'动态发布失败'); await refreshDirectoryAutomationState(); }
   catch(error) { toast('亚托莉动态发布失败：'+error.message); }
 }
+async function refreshDirectoryDevlogState() {
+  try { const data=await api('/api/qzone/automation/devlog'); window._qzoneAutomation={...(window._qzoneAutomation||{}),devlog:data}; renderUserDirectory(); }
+  catch(error) { toast('开发日志状态刷新失败：'+error.message); }
+}
+async function saveDirectoryDevlogSettings(button) {
+  return withButtonBusy(button, ()=>saveDirectoryDevlogSettingsCore(), '保存中…');
+}
+async function saveDirectoryDevlogSettingsCore() {
+  const settings=window._qzoneAutomation?.settings||{};
+  const types=String($('directoryDevlogTypes')?.value||'').split(/[,，]/).map(item=>item.trim()).filter(Boolean);
+  const body={...settings, devlog_enabled:Boolean($('directoryDevlogEnabled')?.checked), devlog_auto_publish:Boolean($('directoryDevlogAutoPublish')?.checked), devlog_daily_cap:Number($('directoryDevlogDailyCap')?.value??2), devlog_visibility_types:types};
+  try { await api('/api/qzone/automation/settings',{method:'POST',body:JSON.stringify(body)}); toast('开发日志设置已保存'); await refreshDirectoryDevlogState(); }
+  catch(error) { toast('开发日志设置保存失败：'+error.message); }
+}
+async function devlogScanNow(button) {
+  return withButtonBusy(button, async ()=>{
+    try {
+      const result=await api('/api/qzone/automation/devlog/scan',{method:'POST',body:JSON.stringify({})});
+      toast(result.initialized?'开发日志水位已初始化，将从下一次提交开始记录':(result.skipped||`采集完成：新增 ${Number(result.added||0)} 条提交，可见 ${Number(result.visible_added||0)} 条`));
+      await refreshDirectoryDevlogState();
+    } catch(error) { toast('采集失败：'+error.message); }
+  }, '采集中…');
+}
+async function devlogGenerateNow(button, regenerate=false) {
+  return withButtonBusy(button, async ()=>{
+    try {
+      const result=await api('/api/qzone/automation/devlog/generate',{method:'POST',body:JSON.stringify({regenerate:!!regenerate})});
+      if(result.ok && result.item) toast(regenerate?'开发手记已重新生成':'开发手记已生成，可编辑后发布');
+      else toast(result.error?`生成失败：${result.error}`:(result.skipped||'生成未完成'));
+      await refreshDirectoryDevlogState();
+    } catch(error) { toast('生成失败：'+error.message); }
+  }, '生成中…');
+}
+async function devlogRegenerate(button) { return devlogGenerateNow(button, true); }
+async function devlogSaveDraft(button, postId) {
+  return withButtonBusy(button, async ()=>{
+    const content=String($('directoryDevlogDraftContent')?.value||'').trim();
+    if(!content) return toast('草稿内容为空');
+    try { await api('/api/qzone/automation/devlog/draft',{method:'POST',body:JSON.stringify({id:postId,content})}); toast('草稿已保存'); await refreshDirectoryDevlogState(); }
+    catch(error) { toast('草稿保存失败：'+error.message); }
+  }, '保存中…');
+}
+async function devlogPublishNow(button, postId) {
+  return withButtonBusy(button, async ()=>{
+    try {
+      const result=await api('/api/qzone/automation/devlog/publish',{method:'POST',body:JSON.stringify({id:postId})});
+      if(result.ok && result.tid) toast('开发手记已发布');
+      else if(result.uncertain) toast('发布超时，结果不确定；为避免重复不会自动重发');
+      else toast(result.error?`发布失败：${result.error}`:(result.skipped||'未发布'));
+      await refreshDirectoryDevlogState();
+    } catch(error) { toast('发布失败：'+error.message); }
+  }, '发布中…');
+}
+async function devlogDeleteDraft(button, postId) {
+  return withButtonBusy(button, async ()=>{
+    try { const result=await api('/api/qzone/automation/devlog/delete',{method:'POST',body:JSON.stringify({id:postId})}); toast(Number(result.released||0)?`已删除，${Number(result.released)} 条提交回到待写状态`:'已删除'); await refreshDirectoryDevlogState(); }
+    catch(error) { toast('删除失败：'+error.message); }
+  }, '删除中…');
+}
 async function toggleQZoneAll(value) {
   $('qzoneEnabled').checked = !!value; await saveQZoneAutomationSettings();
 }

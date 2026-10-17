@@ -36,9 +36,19 @@ class HandlerQZoneMixin:
         for key in ("like_keywords", "comment_keywords"):
             if key in values:
                 values[key] = parse_keywords(values[key])
-        for key in ("enabled", "post_enabled", "post_auto_generate", "like_enabled", "comment_enabled", "comment_use_pool"):
+        for key in ("enabled", "post_enabled", "post_auto_generate", "like_enabled", "comment_enabled", "comment_use_pool", "devlog_enabled", "devlog_auto_publish"):
             if key in values:
                 values[key] = bool(values[key])
+        if "devlog_daily_cap" in values:
+            try:
+                values["devlog_daily_cap"] = max(0, min(10, int(values["devlog_daily_cap"])))
+            except (TypeError, ValueError):
+                return self._send_error(HTTPStatus.BAD_REQUEST, "devlog_daily_cap 必须是整数")
+        if "devlog_visibility_types" in values:
+            raw_types = values["devlog_visibility_types"]
+            if isinstance(raw_types, str):
+                raw_types = raw_types.replace("，", ",").split(",")
+            values["devlog_visibility_types"] = [str(item).strip().casefold() for item in (raw_types or []) if str(item).strip()]
         # Legacy fixed/random fields remain readable for migration, but no
         # longer participate in scheduling. There is one supported model:
         # stable random slots distributed inside the configured window.
@@ -194,6 +204,66 @@ class HandlerQZoneMixin:
             return self._send_error(HTTPStatus.BAD_REQUEST, "缺少评论 id")
         self.webui_state.qzone_automation.store.comment_delete(int(payload["id"]))
         self._send_json({"ok": True})
+
+    # ---- 开发日志（devlog）：状态、采集、生成、草稿、发布、删除 ----
+
+    def _handle_qzone_automation_devlog(self) -> None:
+        self._send_json(self.webui_state.qzone_automation.devlog.status())
+
+    def _handle_qzone_automation_devlog_scan(self) -> None:
+        # 明确的人工触发：绕过采集节流，只入库提交，不发布任何内容。
+        try:
+            result = self.webui_state.qzone_automation.devlog.scan(force=True)
+        except Exception as exc:
+            return self._send_error(HTTPStatus.BAD_GATEWAY, str(exc))
+        self._send_json(result)
+
+    def _handle_qzone_automation_devlog_generate(self) -> None:
+        payload = self._read_json()
+        regenerate = bool(isinstance(payload, dict) and payload.get("regenerate"))
+        devlog = self.webui_state.qzone_automation.devlog
+        if regenerate:
+            draft = devlog.store.devlog_draft()
+            if draft is not None:
+                devlog.delete_draft(int(draft["id"]))
+        try:
+            result = devlog.generate(force=True)
+        except Exception as exc:
+            LOGGER.exception("开发手记生成失败")
+            return self._send_error(HTTPStatus.BAD_GATEWAY, str(exc))
+        self._send_json(result)
+
+    def _handle_qzone_automation_devlog_draft(self) -> None:
+        payload = self._read_json()
+        if not isinstance(payload, dict) or not payload.get("id"):
+            return self._send_error(HTTPStatus.BAD_REQUEST, "缺少手记 id")
+        try:
+            self.webui_state.qzone_automation.devlog.store.devlog_update_post_content(int(payload["id"]), str(payload.get("content") or ""))
+        except (ValueError, TypeError) as exc:
+            return self._send_error(HTTPStatus.BAD_REQUEST, str(exc))
+        self._send_json({"ok": True})
+
+    def _handle_qzone_automation_devlog_publish(self) -> None:
+        payload = self._read_json()
+        post_id: int | None = None
+        if isinstance(payload, dict) and payload.get("id"):
+            try:
+                post_id = int(payload["id"])
+            except (TypeError, ValueError):
+                return self._send_error(HTTPStatus.BAD_REQUEST, "手记 id 无效")
+        # 人工发布仍走幂等状态机与每日上限，不会绕过安全闸。
+        try:
+            result = self.webui_state.qzone_automation.devlog.publish(post_id=post_id)
+        except Exception as exc:
+            LOGGER.exception("开发手记发布失败")
+            return self._send_error(HTTPStatus.BAD_GATEWAY, str(exc))
+        self._send_json(result)
+
+    def _handle_qzone_automation_devlog_delete(self) -> None:
+        payload = self._read_json()
+        if not isinstance(payload, dict) or not payload.get("id"):
+            return self._send_error(HTTPStatus.BAD_REQUEST, "缺少手记 id")
+        self._send_json(self.webui_state.qzone_automation.devlog.delete_draft(int(payload["id"])))
 
     def _handle_qzone_feeds(self, query: str) -> None:
         params = parse_qs(query)

@@ -115,6 +115,8 @@ class HandlerCoreMixin:
         if parsed.path == "/api/qzone/automation/logs":
             params = parse_qs(parsed.query)
             return self._send_json({"ok": True, "logs": self.webui_state.qzone_automation.store.logs(int(params.get("limit", [100])[0] or 100), str(params.get("action", [""])[0]))})
+        if parsed.path == "/api/qzone/automation/devlog":
+            return self._handle_qzone_automation_devlog()
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_POST(self) -> None:
@@ -228,6 +230,16 @@ class HandlerCoreMixin:
             return self._handle_qzone_automation_comment_update()
         if parsed.path == "/api/qzone/automation/comment/delete":
             return self._handle_qzone_automation_comment_delete()
+        if parsed.path == "/api/qzone/automation/devlog/scan":
+            return self._handle_qzone_automation_devlog_scan()
+        if parsed.path == "/api/qzone/automation/devlog/generate":
+            return self._handle_qzone_automation_devlog_generate()
+        if parsed.path == "/api/qzone/automation/devlog/draft":
+            return self._handle_qzone_automation_devlog_draft()
+        if parsed.path == "/api/qzone/automation/devlog/publish":
+            return self._handle_qzone_automation_devlog_publish()
+        if parsed.path == "/api/qzone/automation/devlog/delete":
+            return self._handle_qzone_automation_devlog_delete()
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
 

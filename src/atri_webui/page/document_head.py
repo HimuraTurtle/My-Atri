@@ -408,6 +408,10 @@ PART = r"""<!doctype html>
     .qzone-manual-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; }
     .qzone-manual-actions input,.qzone-manual-actions textarea { flex:1 1 260px; min-width:220px; min-height:38px; box-sizing:border-box; }
     .qzone-manual-actions textarea { resize:vertical; }
+    .devlog-details { margin-top:10px; }
+    .devlog-details summary { cursor:pointer; font-weight:600; }
+    .devlog-commit-row { display:flex; gap:8px; align-items:flex-start; margin:4px 0; font-size:12px; }
+    .devlog-commit-row .badge { flex:none; }
     .qzone-list-foot { margin:12px 2px 0; }
     audio { width:100%; min-height:42px; }
     .surface,.profile,.model-card,.profile-column,.proactive-block,.voice-result,.singing-test-block,.singing-job,.music-stage-card,.minecraft-maid,.stat,.fact,.group-info,.entry,.history-item,.thumb,.pill { transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease; animation:fadeUp .55s ease both; }
