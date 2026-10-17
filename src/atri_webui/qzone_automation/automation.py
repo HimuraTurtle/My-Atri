@@ -1,9 +1,29 @@
 from __future__ import annotations
 
-from .support import QZoneMixin
+import asyncio
+import threading
+import time
+import uuid
+from datetime import datetime
+from typing import TYPE_CHECKING, Any
+
+from .rules import (
+    DEFAULT_SETTINGS,
+    MAX_RECENT_COMMENT_FEEDS,
+    content_quality_issues,
+    next_window_time,
+    period_window,
+    resolve_timezone,
+    schedule_times,
+    topic_for_schedule,
+    topic_prompt,
+)
+
+if TYPE_CHECKING:
+    from . import QZoneAutomationStore
 
 
-class QZoneAutomationMixin(QZoneMixin):
+class QZoneAutomationMixin:
     def __init__(self, store: QZoneAutomationStore, admin_factory: Any, post_generator: Any = None, comment_generator: Any = None, fact_context_provider: Any = None) -> None:
         self.store = store
         self.admin_factory = admin_factory
@@ -52,7 +72,7 @@ class QZoneAutomationMixin(QZoneMixin):
         topic = topic_for_schedule(settings, scheduled_at, slot_index)
         if not any(marker in topic for marker in ("热点", "新闻", "前沿", "科普", "技术", "科学", "研究", "社会")):
             return ""
-        cache_key = f"{datetime.fromtimestamp(scheduled_at, _zone(settings.get('timezone'))):%Y-%m-%d}|{topic}"
+        cache_key = f"{datetime.fromtimestamp(scheduled_at, resolve_timezone(settings.get('timezone'))):%Y-%m-%d}|{topic}"
         cached_at, cached_value = self._fact_cache.get(cache_key, (0.0, ""))
         if time.time() - cached_at < 1800:
             return cached_value
@@ -149,7 +169,7 @@ class QZoneAutomationMixin(QZoneMixin):
     def dashboard(self) -> dict[str, Any]:
         settings = self.store.settings()
         if settings.get("post_enabled"):
-            _, window_start, _ = _period_window(settings)
+            _, window_start, _ = period_window(settings)
             slots = schedule_times(settings)
             period_key = window_start.strftime("%Y-%m-%d")
             if settings.get("schedule_period_start") != period_key or settings.get("schedule_slots") != slots:
@@ -206,7 +226,7 @@ class QZoneAutomationMixin(QZoneMixin):
         if not settings.get("post_enabled") or not settings.get("post_auto_generate"):
             return self.store.next_content()
         pending = self.store.next_content()
-        _, window_start, _ = _period_window(settings)
+        _, window_start, _ = period_window(settings)
         posted_count = self._period_post_count(window_start)
         # Always derive the target from the current period quota.  Trusting a
         # stale ``scheduled_at`` here was the reason deleting/reloading could
@@ -303,7 +323,7 @@ class QZoneAutomationMixin(QZoneMixin):
         settings = self.store.settings()
         if not settings.get("post_enabled"):
             return self.store.next_content()
-        _, window_start, _ = _period_window(settings)
+        _, window_start, _ = period_window(settings)
         posted_count = self._period_post_count(window_start)
         target_at = next_window_time(settings, posted_count=posted_count)
         self.store.save_settings({"next_post_at": target_at})
@@ -335,7 +355,7 @@ class QZoneAutomationMixin(QZoneMixin):
         if not settings.get("post_enabled"):
             return 0
         now = time.time()
-        local, window_start, window_end = _period_window(settings, now)
+        local, window_start, window_end = period_window(settings, now)
         period_key = window_start.strftime("%Y-%m-%d")
         slots = schedule_times(settings, now)
         if settings.get("schedule_period_start") != period_key or settings.get("schedule_slots") != slots:
