@@ -515,3 +515,302 @@ def test_prepare_reuses_failed_fact_lookup_instead_of_querying_twice(tmp_path) -
 
     assert automation.prepare_next_generated() is not None
     assert calls == 1
+
+
+class _DevLogAdmin:
+    def __init__(self, fail_with: Exception | None = None) -> None:
+        self.posts: list[str] = []
+        self.fail_with = fail_with
+
+    def post(self, content: str, visibility: int = 1) -> dict[str, str]:
+        if self.fail_with is not None:
+            raise self.fail_with
+        self.posts.append(content)
+        return {"tid": "devlog-tid"}
+
+
+def _devlog_commit(suffix: str, subject: str, committed_at: float = 1.0) -> dict[str, object]:
+    return {"sha": f"{suffix}" * 40, "subject": subject, "committed_at": committed_at}
+
+
+def _patch_collect(monkeypatch, by_watermark: dict[str, list[dict[str, object]]]) -> None:
+    from atri_webui.qzone_automation import devlog as devlog_module
+
+    def fake_collect(root, since_sha: str = "") -> list[dict[str, object]]:
+        return list(by_watermark.get(str(since_sha or "").strip(), []))
+
+    monkeypatch.setattr(devlog_module, "collect_commits", fake_collect)
+
+
+def test_devlog_classify_and_sensitive_gate() -> None:
+    from atri_webui.qzone_automation import classify_commit, is_sensitive_subject
+
+    assert classify_commit("feat: 新增面板") == "feat"
+    assert classify_commit("修复登录态丢失的问题") == "fix"
+    assert classify_commit("消息面板: 新增导出按钮") == "feat"
+    assert classify_commit("perf(sql): 压缩重试间隔") == "perf"
+    assert classify_commit("随便改了点东西") == "other"
+    assert is_sensitive_subject("readme http://example.com/secret") is True
+    assert is_sensitive_subject("修改 C:\\keys\\prod.env") is True
+    assert is_sensitive_subject("store.py 增加索引") is True
+    assert is_sensitive_subject("新增开发日志面板") is False
+
+
+def test_devlog_first_scan_only_initializes_watermark(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service = DevLogService(store, lambda: _DevLogAdmin(), None, root=tmp_path)
+
+    result = service.scan(force=True)
+
+    assert result["initialized"] is True
+    assert result["added"] == 0
+    assert store.devlog_pending_commits() == []
+    assert store.settings()["devlog_last_scan_sha"] == "a" * 40
+    assert service.generate() == {"ok": True, "skipped": "没有待写进手记的提交"}
+
+
+def test_devlog_scan_keeps_only_visible_commits(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    service = DevLogService(store, lambda: _DevLogAdmin(), None, root=tmp_path)
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service.scan(force=True)
+    _patch_collect(
+        monkeypatch,
+        {
+            "a" * 40: [
+                _devlog_commit("b", "feat: 新增开发日志面板", 2.0),
+                _devlog_commit("c", "修复 http://example.com/leak 的地址", 3.0),
+                _devlog_commit("d", "chore: 更新依赖版本", 4.0),
+            ]
+        },
+    )
+
+    result = service.scan(force=True)
+
+    assert result["added"] == 3
+    assert result["visible_added"] == 1
+    pending = store.devlog_pending_commits()
+    assert [item["sha"][0] for item in pending] == ["b"]
+    assert store.settings()["devlog_last_scan_sha"] == "d" * 40
+
+
+def test_devlog_generate_creates_draft_and_keeps_commits_pending(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    service = DevLogService(store, lambda: _DevLogAdmin(), None, root=tmp_path)
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增开发日志面板", 2.0)]})
+    service.scan(force=True)
+    prompts: list[str] = []
+
+    def generator(prompt: str, profile_id: str) -> dict[str, str]:
+        prompts.append(prompt)
+        return {"content": "今天主人给装上了新的开发日志面板，我把它和采集链路一起整理好了，以后更新会自己写成手记。"}
+
+    service.post_generator = generator
+
+    result = service.generate(force=True)
+
+    assert result["ok"] is True
+    assert result["item"]["status"] == "draft"
+    assert "开发日志面板" in prompts[0]
+    assert len(store.devlog_pending_commits()) == 1
+    assert service.generate(force=True)["skipped"] == "已有草稿"
+
+
+def test_devlog_generate_rejects_thin_or_unsafe_content_without_consuming(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service = DevLogService(store, lambda: _DevLogAdmin(), lambda *_: {"content": "太短"}, root=tmp_path)
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增开发日志面板", 2.0)]})
+    service.scan(force=True)
+
+    thin = service.generate(force=True)
+    unsafe = DevLogService(
+        store,
+        lambda: _DevLogAdmin(),
+        lambda *_: {"content": "这次更新详见 http://example.com/changelog，内容非常详尽，欢迎主人阅读。"},
+        root=tmp_path,
+    ).generate(force=True)
+
+    assert thin["ok"] is False
+    assert store.devlog_draft() is None
+    assert unsafe["ok"] is False
+    assert store.devlog_draft() is None
+    assert len(store.devlog_pending_commits()) == 1
+    assert [row["status"] for row in store.logs(10, "devlog_generate")] == ["failed", "failed"]
+
+
+def test_devlog_generate_failure_is_retried_not_fabricated(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+
+    def broken_generator(prompt: str, profile_id: str) -> dict[str, str]:
+        raise RuntimeError("模型超时")
+
+    service = DevLogService(store, lambda: _DevLogAdmin(), broken_generator, root=tmp_path)
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增开发日志面板", 2.0)]})
+    service.scan(force=True)
+
+    result = service.generate(force=True)
+
+    assert result["ok"] is False
+    assert "重试" in result["skipped"]
+    assert store.devlog_draft() is None
+    assert len(store.devlog_pending_commits()) == 1
+
+
+def test_devlog_publish_is_idempotent_and_consumes_commits(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    admin = _DevLogAdmin()
+    service = DevLogService(store, lambda: admin, lambda *_: {"content": "新的采集与手记链路已经接好，接下来就等下一次提交触发自动发布了。"}, root=tmp_path)
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增开发日志面板", 2.0)]})
+    service.scan(force=True)
+    service.generate(force=True)
+
+    first = service.publish()
+
+    assert first["ok"] is True and first["tid"] == "devlog-tid"
+    assert admin.posts == ["新的采集与手记链路已经接好，接下来就等下一次提交触发自动发布了。"]
+    assert store.devlog_pending_commits() == []
+    assert store.devlog_draft() is None
+    assert [row["status"] for row in store.devlog_posts(10)][0] == "published"
+    assert service.publish()["skipped"] == "没有可发布的草稿"
+    assert len(admin.posts) == 1
+
+
+def test_devlog_publish_respects_daily_cap(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    store.save_settings({"devlog_daily_cap": 1})
+    admin = _DevLogAdmin()
+    service = DevLogService(store, lambda: admin, lambda *_: {"content": "手记正文一：采集链路已经初始化完成，水位推进正常，后续提交都会进入待写列表。"}, root=tmp_path)
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增面板", 2.0)]})
+    service.scan(force=True)
+    service.generate(force=True)
+    assert service.publish()["ok"] is True
+
+    _patch_collect(monkeypatch, {"b" * 40: [_devlog_commit("e", "feat: 又一次更新", 3.0)]})
+    service.scan(force=True)
+    service.post_generator = lambda *_: {"content": "手记正文二：第二轮更新也完成了，包含一次修复与一次重构，整体稳定运行中。"}
+    service.generate(force=True)
+
+    capped = service.publish()
+
+    assert capped["skipped"] == "已达每日开发手记上限"
+    assert len(admin.posts) == 1
+
+
+def test_devlog_definite_failure_keeps_commits_for_retry(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    failing = _DevLogAdmin(fail_with=ValueError("QQ 空间登录已失效"))
+    service = DevLogService(store, lambda: failing, lambda *_: {"content": "手记正文：这轮更新整理完毕，包括采集、生成与发布三个部分，正在等待发布。"}, root=tmp_path)
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增面板", 2.0)]})
+    service.scan(force=True)
+    service.generate(force=True)
+
+    result = service.publish()
+
+    assert result["ok"] is False
+    assert result["uncertain"] is False
+    assert store.devlog_posts(10)[0]["status"] == "failed"
+    assert len(store.devlog_pending_commits()) == 1
+    # 失败的旧手记不阻塞新草稿；登录恢复后由新草稿重新发布。
+    working = _DevLogAdmin()
+    service.admin_factory = lambda: working
+    service.post_generator = lambda *_: {"content": "手记正文重写：登录恢复之后，我把同一批提交重新整理成了一篇新的手记。"}
+    regenerated = service.generate(force=True)
+    assert regenerated["ok"] is True
+    # 人工发布显式指定草稿 id，不受自动发布退避影响。
+    assert service.publish(post_id=int(store.devlog_draft()["id"]))["ok"] is True
+    assert working.posts
+
+
+def test_devlog_uncertain_timeout_consumes_commits_without_retry(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    admin = _DevLogAdmin(fail_with=TimeoutError("发布请求 timed out"))
+    service = DevLogService(store, lambda: admin, lambda *_: {"content": "手记正文：发布链路今天接好了，超时的那一篇不会自动重发，避免重复打扰。"}, root=tmp_path)
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增面板", 2.0)]})
+    service.scan(force=True)
+    service.generate(force=True)
+
+    result = service.publish()
+
+    assert result["ok"] is False
+    assert result["uncertain"] is True
+    assert store.devlog_pending_commits() == []
+    assert store.devlog_posts(10)[0]["status"] == "failed"
+    # 不确定态不保留待写提交，也不会自动重发。
+    assert service.publish()["skipped"] == "没有可发布的草稿"
+
+
+def test_devlog_delete_draft_releases_commits(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service = DevLogService(store, lambda: _DevLogAdmin(), lambda *_: {"content": "手记草稿：这批提交整理完成，等待主人确认之后再发布到空间。"}, root=tmp_path)
+    service.scan(force=True)
+    _patch_collect(monkeypatch, {"a" * 40: [_devlog_commit("b", "feat: 新增面板", 2.0), _devlog_commit("c", "fix: 修复水位", 3.0)]})
+    service.scan(force=True)
+    service.generate(force=True)
+    draft_id = int(store.devlog_draft()["id"])
+
+    result = service.delete_draft(draft_id)
+
+    assert result["released"] == 2
+    assert store.devlog_draft() is None
+    assert len(store.devlog_pending_commits()) == 2
+
+
+def test_devlog_run_cycle_respects_disabled_switch(tmp_path, monkeypatch) -> None:
+    from atri_webui.qzone_automation import DevLogService
+
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    _patch_collect(monkeypatch, {"": [_devlog_commit("a", "feat: 历史提交一")]})
+    service = DevLogService(store, lambda: _DevLogAdmin(), lambda *_: {"content": "不应生成的手记"}, root=tmp_path)
+
+    result = service.run_cycle()
+
+    assert result["skipped"] == "开发日志未启用"
+    assert store.devlog_pending_commits() == []
+
+
+def test_dashboard_includes_devlog_status(tmp_path, monkeypatch) -> None:
+    store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
+    automation = QZoneAutomation(store, lambda: _FakeAdmin())
+
+    dashboard = automation.dashboard()
+
+    assert dashboard["devlog"]["ok"] is True
+    assert dashboard["devlog"]["settings"]["devlog_enabled"] is False
+    assert dashboard["devlog"]["pending"] == []
+    assert dashboard["devlog"]["draft"] is None

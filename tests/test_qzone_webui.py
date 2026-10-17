@@ -185,3 +185,15 @@ def test_webui_contains_manual_qzone_controls() -> None:
     assert "/api/qzone/comment" in html
     assert "点赞这条动态" in html
     assert "发表生成评论" in html
+
+
+def test_webui_contains_devlog_panel_and_endpoints() -> None:
+    html = render_index()
+
+    assert "/api/qzone/automation/devlog" in html
+    assert "/api/qzone/automation/devlog/scan" in html
+    assert "/api/qzone/automation/devlog/generate" in html
+    assert "/api/qzone/automation/devlog/publish" in html
+    assert "userDirectoryDevlogMarkup" in html
+    assert "保存开发日志设置" in html
+    assert "立即采集" in html

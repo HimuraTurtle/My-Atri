@@ -227,6 +227,18 @@ QZONE_BRIDGE_TOKEN=与Bridge一致的AccessToken
 
 重启亚托莉后打开 WebUI → QQ动态。也可以进入 WebUI → 测试 → 开发者状态与访问入口，点击“QQ动态 WebUI”直达该页面；下拉列表只显示记忆面板中的人物 QQ，点赞和评论均需在页面人工确认。QQ 空间 Cookie 只应保存在 Bridge 中，不要写入本项目。
 
+### 开发日志（ATRI 开发手记）
+
+`qzone_automation/devlog` 会把本仓库的代码提交转写成亚托莉口吻的开发手记，发布到机器人自己的 QQ 空间。在 WebUI → 用户中心 → 亚托莉卡片的「开发日志」区块开启「启用采集」即可，默认关闭。
+
+- **采集**：每 10 分钟读取水位之后的新提交（`git log`），首次开启只初始化水位，不会把历史提交一次性广播出去。
+- **三道安全闸**：只有 `devlog_visibility_types`（默认 `feat/fix/perf/refactor`）类型的提交进入手记；标题包含链接、文件路径、密钥、邮箱等敏感信息的提交直接跳过；每天最多发布 `devlog_daily_cap` 篇（默认 2，0 为停发）。
+- **生成与降级**：手记由 `generate_qzone_text` 用 ATRI 口吻提示词从提交记录生成，提示词内建反编造约束；生成失败或正文未过检查（过短、过长、含敏感信息）时保留待写提交、退避重试，绝不编造“今天没有更新”一类的填充内容。
+- **幂等发布**：草稿 → publishing → published 的状态机由 SQLite 原子更新保证，多个进程不会重复发布；发布超时视为“可能已发出”的不确定态，放弃自动重发以免重复刷屏。
+- **手动操作**：面板支持立即采集、立即生成、编辑草稿、重新生成、手动发布与删除；手动发布同样受每日上限与幂等状态机约束。
+
+相关接口：`GET /api/qzone/automation/devlog`、`POST /api/qzone/automation/devlog/{scan,generate,draft,publish,delete}`；配置项随 `/api/qzone/automation/settings` 一起保存。
+
 ## Windows 双端部署（Docker 聊天 + 宿主机语音）
 
 Windows 上推荐的结构：**聊天运行在 Docker**（NapCat + 亚托莉），**语音合成运行在宿主机**（GPT-SoVITS + `atri_voice_service`），两端通过 `host.docker.internal` 互通。
