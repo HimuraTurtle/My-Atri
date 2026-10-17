@@ -1,11 +1,23 @@
 from __future__ import annotations
 
-from .support import QZoneMixin
+import json
+import sqlite3
+import threading
+import time
+import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+from .rules import DEFAULT_SETTINGS, DEFAULT_TOPIC_ROTATION, LEGACY_TOPIC_ROTATION, schedule_signature
 
 
-class QZoneStoreMixin(QZoneMixin):
+class QZoneStoreMixin:
     def __init__(self, path: Path | None = None) -> None:
-        self.path = path or Path("data") / "qzone_automation.sqlite3"
+        if path is None:
+            # 相对路径必须锚定项目根，否则会随进程 cwd 漂移（曾落到 src/data/）。
+            path = Path(__file__).resolve().parents[3] / "data" / "qzone_automation.sqlite3"
+        self.path = path
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._init_db()
@@ -152,11 +164,11 @@ class QZoneStoreMixin(QZoneMixin):
 
     def save_settings(self, values: dict[str, Any]) -> dict[str, Any]:
         current = self.settings()
-        old_signature = str(current.get("schedule_signature") or "") or _schedule_signature(current)
+        old_signature = str(current.get("schedule_signature") or "") or schedule_signature(current)
         current.update({key: value for key, value in values.items() if key in DEFAULT_SETTINGS})
         if not str(current.get("post_prompt") or "").strip():
             current["post_prompt"] = str(DEFAULT_SETTINGS["post_prompt"])
-        new_signature = _schedule_signature(current)
+        new_signature = schedule_signature(current)
         # A timing edit is an explicit request to rebuild the schedule. Other
         # saves (like toggling a user interaction target) must preserve it.
         timing_keys = {"period_days", "posts_per_period", "post_start_hour", "post_end_hour", "timezone"}

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import sqlite3
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 
 import atri_webui.qzone_automation as qzone_automation
@@ -51,7 +52,7 @@ def test_due_window_posts_pending_item_immediately(tmp_path, monkeypatch) -> Non
     )
 
     slots = schedule_times(settings, now=now.timestamp())
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: slots[0] + 180)
+    monkeypatch.setattr(time, "time", lambda: slots[0] + 180)
     assert automation._post_if_due(store.settings()) == 1
     assert admin.posts == [item["content"]]
     assert store.next_content() is None
@@ -175,7 +176,7 @@ def test_due_generated_item_is_refreshed_for_actual_catchup_time(tmp_path, monke
             return {"content": "按实际补发时刻重新生成的动态，内容与当前发布时刻保持一致。"}
         return {"content": "下一条动态会换一个观察角度，并保留具体的事实依据。"}
 
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: now)
+    monkeypatch.setattr(time, "time", lambda: now)
     automation = QZoneAutomation(store, lambda: admin, post_generator=generate)
 
     assert automation._post_if_due(store.settings()) == 1
@@ -252,10 +253,10 @@ def test_refresh_preserves_slot_until_timing_changes(tmp_path) -> None:
 def test_scheduler_lease_blocks_duplicate_processes_and_expires(tmp_path, monkeypatch) -> None:
     store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
     now = 1_000.0
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: now)
+    monkeypatch.setattr(time, "time", lambda: now)
     assert store.acquire_scheduler_lease("first", ttl=60)
     assert not store.acquire_scheduler_lease("second", ttl=60)
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: now + 91)
+    monkeypatch.setattr(time, "time", lambda: now + 91)
     assert store.acquire_scheduler_lease("second", ttl=60)
 
 
@@ -284,7 +285,7 @@ def test_same_schedule_slot_is_published_only_once_across_processes(tmp_path, mo
     )
     first_store.content_add("同一个发布时间槽位只能被发送一次，这条内容用于并发回归测试。")
     due_at = schedule_times(settings, now=now.timestamp())[0] + 180
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: due_at)
+    monkeypatch.setattr(time, "time", lambda: due_at)
 
     start_barrier = threading.Barrier(2)
     posted: list[str] = []
@@ -404,7 +405,7 @@ def test_uncertain_external_send_consumes_slot_without_automatic_retry(tmp_path,
     )
     store.content_add("外部接口超时以后不应自动重复发送同一个槽位的动态。")
     due_at = schedule_times(settings, now=now.timestamp())[0] + 180
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: due_at)
+    monkeypatch.setattr(time, "time", lambda: due_at)
     calls = 0
 
     class TimeoutAdmin:
@@ -465,7 +466,7 @@ def test_completed_period_previews_first_random_slot_of_next_period() -> None:
 def test_scheduler_restores_missing_generated_preview_before_due(tmp_path, monkeypatch) -> None:
     store = QZoneAutomationStore(tmp_path / "qzone.sqlite3")
     now = datetime(2026, 8, 24, 15, 0, tzinfo=timezone(timedelta(hours=8))).timestamp()
-    monkeypatch.setattr(qzone_automation.time, "time", lambda: now)
+    monkeypatch.setattr(time, "time", lambda: now)
     store.save_settings(
         {
             "enabled": True,
