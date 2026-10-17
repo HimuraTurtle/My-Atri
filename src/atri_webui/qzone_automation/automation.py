@@ -7,6 +7,7 @@ import uuid
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from .devlog import DevLogService
 from .rules import (
     DEFAULT_SETTINGS,
     MAX_RECENT_COMMENT_FEEDS,
@@ -30,6 +31,7 @@ class QZoneAutomationMixin:
         self.post_generator = post_generator
         self.comment_generator = comment_generator
         self.fact_context_provider = fact_context_provider
+        self.devlog = DevLogService(store, admin_factory, post_generator)
         self._task: asyncio.Task[None] | None = None
         self._run_lock = threading.Lock()
         self._lease_owner = f"qzone-{uuid.uuid4().hex}"
@@ -56,9 +58,11 @@ class QZoneAutomationMixin:
             try:
                 await asyncio.sleep(30)
                 settings = self.store.settings()
-                if not settings.get("enabled"):
-                    continue
-                await asyncio.to_thread(self.run_once)
+                if settings.get("enabled"):
+                    await asyncio.to_thread(self.run_once)
+                # 开发日志独立于总控：只看 devlog_enabled，循环内自带采集节流。
+                if settings.get("devlog_enabled"):
+                    await asyncio.to_thread(self.devlog.run_cycle)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -206,6 +210,7 @@ class QZoneAutomationMixin:
         return {
             "ok": True,
             "settings": settings,
+            "devlog": self.devlog.status(),
             "next_post": {
                 "scheduled_at": float(settings.get("next_post_at") or 0),
                 "item": pending,
