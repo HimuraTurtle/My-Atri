@@ -12,6 +12,7 @@ from atri_webui import config_admin
 from atri_webui.memory_admin import MemoryAdmin, memory_admin_for_config
 from atri_webui import model_profiles as model_profiles_module
 from atri_webui import server as webui_server
+from atri_webui.server_parts import shared as webui_shared
 from atri_webui.model_profiles import (
     activate_model_profile,
     local_models_payload,
@@ -906,7 +907,7 @@ def test_webui_test_chat_reports_failure_without_fallback_reply(
         def _fallback_reply(self, conversation_id: str, text: str) -> str:
             return "fallback reply"
 
-    monkeypatch.setattr(webui_server, "AtriReplyEngine", FailingEngine)
+    monkeypatch.setattr(webui_shared, "AtriReplyEngine", FailingEngine)
     config = BotConfig(
         bot_qq=100000001,
         host="127.0.0.1",
@@ -952,7 +953,7 @@ def test_webui_test_chat_uses_the_same_relaxed_quality_mode_as_runtime(
                 raise RuntimeError("工具型回复被误判为长段说明")
             return reply
 
-    monkeypatch.setattr(webui_server, "AtriReplyEngine", ToolReplyEngine)
+    monkeypatch.setattr(webui_shared, "AtriReplyEngine", ToolReplyEngine)
     config = BotConfig(
         bot_qq=100000001,
         host="127.0.0.1",
