@@ -1,9 +1,31 @@
 from __future__ import annotations
 
-from .handler_support import WebUIHandlerMixin, _sync_webui_globals
+from http import HTTPStatus
+from typing import Any
+from urllib.parse import parse_qs
+
+from atri_qq_bot.proactive import load_proactive_policy, save_proactive_policy
+from atri_qq_bot.runtime.modality_access import load_modality_access, save_modality_access
+
+from ..config_admin import config_payload, update_env
+from ..minecraft_admin import save_minecraft_bridge_config, send_minecraft_command
+from ..model_profiles import (
+    activate_model_profile,
+    delete_model_profile,
+    public_model_profile,
+    upsert_model_profile,
+)
+from ..user_directory import UserDirectory
+from .shared import (
+    MUSIC_SERVICE_URL,
+    _music_bridge_request,
+    run_coro,
+    singing_reference_payload,
+    test_chat,
+)
 
 
-class HandlerConfigMixin(WebUIHandlerMixin):
+class HandlerConfigMixin:
     def _handle_minecraft_config(self) -> None:
         try:
             config = save_minecraft_bridge_config(self._read_json())

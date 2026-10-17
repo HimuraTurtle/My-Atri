@@ -1,9 +1,25 @@
 from __future__ import annotations
 
-from .handler_support import WebUIHandlerMixin, _sync_webui_globals
+import contextlib
+import json
+import time
+from datetime import datetime, timedelta
+from http import HTTPStatus
+from typing import Any
+from urllib.parse import parse_qs
+
+from atri_qq_bot.insights import (
+    group_summary_html,
+    render_group_summary_image,
+    save_insights_env,
+    summary_markdown,
+)
+from atri_qq_bot.insights.evaluation import EvaluationSample
+
+from .shared import _music_bridge_request, _valid_singing_job_id, run_coro
 
 
-class HandlerInsightsMixin(WebUIHandlerMixin):
+class HandlerInsightsMixin:
     def _insights_runtime(self) -> Any:
         runtime = getattr(self.webui_state.server, "insights", None)
         if runtime is None:

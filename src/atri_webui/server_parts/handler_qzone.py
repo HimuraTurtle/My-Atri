@@ -1,9 +1,16 @@
 from __future__ import annotations
 
-from .handler_support import WebUIHandlerMixin, _sync_webui_globals
+import threading
+from http import HTTPStatus
+from typing import Any
+from urllib.parse import parse_qs
+
+from ..qzone_admin import QZoneAdmin, QZoneBridgeError
+from ..qzone_automation import parse_keywords
+from .shared import LOGGER, generate_qzone_text, run_coro
 
 
-class HandlerQZoneMixin(WebUIHandlerMixin):
+class HandlerQZoneMixin:
     def _qzone_admin(self) -> QZoneAdmin:
         # 复用记忆面板的聚合结果，确保这里只能选择已经认识的人物 QQ。
         return QZoneAdmin(

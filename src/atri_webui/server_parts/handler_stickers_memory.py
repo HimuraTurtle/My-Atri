@@ -1,9 +1,25 @@
 from __future__ import annotations
 
-from .handler_support import WebUIHandlerMixin, _sync_webui_globals
+import shutil
+from http import HTTPStatus
+from pathlib import Path
+
+from atri_qq_bot.runtime import STICKER_DELETED_DIR, STICKER_ROOT
+
+from ..sticker_admin import (
+    IMAGE_EXTENSIONS,
+    looks_like_image_bytes,
+    resolve_under,
+    safe_filename,
+    sanitize_category,
+    sticker_file_payload,
+    unique_path,
+)
+from ..upload_parser import multipart_file, multipart_text, parse_multipart_form
+from .shared import MAX_UPLOAD_BYTES
 
 
-class HandlerStickersMemoryMixin(WebUIHandlerMixin):
+class HandlerStickersMemoryMixin:
     def _handle_sticker_category(self) -> None:
         payload = self._read_json()
         name = sanitize_category(str((payload or {}).get("name") or ""))
