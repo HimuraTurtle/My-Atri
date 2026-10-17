@@ -20,12 +20,13 @@ from .model_profiles import (
     upsert_model_profile,
 )
 from .page import render_index
+from atri_qq_bot.runtime.control import restart_background_services
+
 from .server import (
     AtriWebUIHandler,
     LocalThreadingHTTPServer,
     WebUIState,
     bind_loop,
-    restart_background_services,
     start_webui,
     stop_webui,
 )

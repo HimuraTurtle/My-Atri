@@ -1,9 +1,19 @@
 from __future__ import annotations
 
-from .handler_support import WebUIHandlerMixin, _sync_webui_globals
+from http import HTTPStatus
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+from atri_qq_bot.runtime.control import restart_background_services
+
+from ..config_admin import config_payload
+from ..minecraft_admin import minecraft_dashboard
+from ..model_profiles import MODEL_PRESETS, local_models_payload, model_profiles_payload
+from ..sticker_admin import sticker_summary
+from .shared import _render_index_dynamic
 
 
-class HandlerCoreMixin(WebUIHandlerMixin):
+class HandlerCoreMixin:
     def log_message(self, format: str, *args: Any) -> None:
         return
 

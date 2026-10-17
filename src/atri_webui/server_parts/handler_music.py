@@ -1,9 +1,41 @@
 from __future__ import annotations
 
-from .handler_support import WebUIHandlerMixin, _sync_webui_globals
+import contextlib
+import subprocess
+from http import HTTPStatus
+from pathlib import Path
+from typing import Any
+from urllib.error import HTTPError
+from urllib.parse import parse_qs, quote
+from urllib.request import Request, urlopen
+
+from atri_qq_bot.music import (
+    complete_song_files,
+    delivery_song_catalog,
+    export_delivery_segments,
+    save_complete_song,
+)
+from atri_qq_bot.runtime.paths import COMPLETE_MUSIC_ROOT, DELIVERY_MUSIC_ROOT
+
+from ..sticker_admin import safe_filename, unique_path
+from ..upload_parser import multipart_file, multipart_text, parse_multipart_form
+from .shared import (
+    AUDIO_EXTENSIONS,
+    LOGGER,
+    MAX_COMPLETE_MUSIC_UPLOAD_BYTES,
+    MAX_MUSIC_SOURCE_UPLOAD_BYTES,
+    MAX_MUSIC_STEM_UPLOAD_BYTES,
+    MUSIC_IMPORT_ROOT,
+    MUSIC_SERVICE_URL,
+    MUSIC_SOURCE_ROOT,
+    _music_bridge_request,
+    _valid_music_artifact_name,
+    _valid_music_stage,
+    _valid_singing_job_id,
+)
 
 
-class HandlerMusicMixin(WebUIHandlerMixin):
+class HandlerMusicMixin:
     def _handle_music_projects(self) -> None:
         try:
             payload = _music_bridge_request("/api/projects")
