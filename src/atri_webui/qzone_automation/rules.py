@@ -53,7 +53,34 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "comment_use_pool": True, "feed_limit": 20, "max_likes_per_run": 10, "max_comments_per_run": 2,
     "last_post_at": 0.0, "next_post_at": 0.0, "schedule_signature": "", "last_scheduler_at": 0.0,
     "schedule_slots": [], "schedule_period_start": "",
+    "devlog_enabled": False, "devlog_auto_publish": True,
+    "devlog_visibility_types": ["feat", "fix", "perf", "refactor"],
+    "devlog_daily_cap": 2, "devlog_last_scan_sha": "", "devlog_last_scan_at": 0.0,
 }
+
+# 开发日志素材里的提交上限；超出的最老提交会被折叠成“另有 N 项更早改动”。
+DEVLOG_MAX_COMMITS_PER_POST = 15
+
+def devlog_material_prompt(commits: list[dict[str, Any]], *, hidden_count: int = 0) -> str:
+    """把可见提交转写成给生成模型的素材提示词；反编造约束直接写进提示词。"""
+    lines = [
+        f"- {str(item.get('commit_type') or 'feat')}：{str(item.get('subject') or '').strip()}"
+        for item in commits[:DEVLOG_MAX_COMMITS_PER_POST]
+        if str(item.get("subject") or "").strip()
+    ]
+    overflow = max(0, len(commits) - DEVLOG_MAX_COMMITS_PER_POST)
+    tail = f"- 另有 {overflow + max(0, int(hidden_count or 0))} 项更早或内部维护改动，不展开。" if (overflow or hidden_count) else ""
+    return (
+        "以亚托莉的第一人称写一条 QQ 空间开发手记，向主人汇报自己刚完成的更新。\n"
+        "以下是本次更新的代码提交记录（类型：说明）：\n"
+        + "\n".join([*lines, tail])
+        + "\n要求：\n"
+        "1. 只描述这些提交明确写到的内容，不得虚构没做过的功能，不得编造数字、细节或亲历场景。\n"
+        "2. 自然口语化，像机器女孩向主人汇报近况，可以带一点点小自豪，但不要夸张。\n"
+        "3. 不提及文件路径、代码、接口、密钥、内部工具名等细节，只讲学会了什么、修好了什么。\n"
+        "4. 控制在 40-140 字，不要分点列条，一两句话自然收尾。\n"
+        "5. 只输出可直接发布的正文，不要解释、不要引号。"
+    )
 
 def schedule_signature(settings: dict[str, Any]) -> str:
     """Stable signature for fields that determine future publication slots."""

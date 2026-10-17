@@ -91,9 +91,34 @@ class QZoneStoreMixin:
                     published_at REAL,
                     tid TEXT NOT NULL DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS qzone_devlog_commits (
+                    sha TEXT PRIMARY KEY,
+                    subject TEXT NOT NULL,
+                    commit_type TEXT NOT NULL DEFAULT 'other',
+                    committed_at REAL NOT NULL DEFAULT 0,
+                    first_seen_at REAL NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    post_id INTEGER
+                );
+                CREATE TABLE IF NOT EXISTS qzone_devlog_posts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    content TEXT NOT NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    commit_shas TEXT NOT NULL DEFAULT '[]',
+                    prompt TEXT NOT NULL DEFAULT '',
+                    model_profile_id TEXT NOT NULL DEFAULT '',
+                    generated_at REAL,
+                    published_at REAL,
+                    tid TEXT NOT NULL DEFAULT '',
+                    last_error TEXT NOT NULL DEFAULT ''
+                );
                 CREATE INDEX IF NOT EXISTS idx_qzone_logs_created ON qzone_automation_logs(created_at DESC);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_qzone_logs_success_tid
                   ON qzone_automation_logs(action, tid) WHERE status='success' AND tid <> '';
+                CREATE INDEX IF NOT EXISTS idx_qzone_devlog_commits_pending
+                  ON qzone_devlog_commits(status, committed_at);
+                CREATE INDEX IF NOT EXISTS idx_qzone_devlog_posts_status
+                  ON qzone_devlog_posts(status, id DESC);
                 """
             )
             # 兼容第一版已经创建的内容池数据库。
@@ -499,6 +524,172 @@ class QZoneStoreMixin:
                 "SELECT COUNT(*) AS count FROM qzone_post_slots "
                 "WHERE slot_key LIKE ? AND status IN ('sending','published','uncertain')",
                 (f"{str(period_key)}:%",),
+            ).fetchone()
+        return int(row["count"] if row else 0)
+
+    # ---- 开发日志（devlog）----
+
+    def devlog_add_commits(self, commits: list[dict[str, Any]]) -> int:
+        """记录新扫描到的提交，sha 重复时忽略；返回本次新入库条数。"""
+        now = time.time()
+        added = 0
+        with self._lock, self._connect() as db:
+            for item in commits:
+                sha = str(item.get("sha") or "").strip()
+                if not sha:
+                    continue
+                cursor = db.execute(
+                    "INSERT OR IGNORE INTO qzone_devlog_commits(sha,subject,commit_type,committed_at,first_seen_at,status) "
+                    "VALUES(?,?,?,?,?,?)",
+                    (
+                        sha[:64],
+                        str(item.get("subject") or "")[:300],
+                        str(item.get("commit_type") or "other")[:24],
+                        float(item.get("committed_at") or 0),
+                        now,
+                        "pending" if item.get("visible", True) else "skipped",
+                    ),
+                )
+                added += int(cursor.rowcount or 0)
+        return added
+
+    def devlog_pending_commits(self) -> list[dict[str, Any]]:
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM qzone_devlog_commits WHERE status='pending' ORDER BY committed_at, sha"
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def devlog_create_post_if_absent(
+        self,
+        content: str,
+        *,
+        commit_shas: list[str],
+        prompt: str = "",
+        model_profile_id: str = "",
+    ) -> dict[str, Any] | None:
+        """原子地创建唯一 draft；已有 draft 时返回 None，用于多进程互斥。"""
+        text = str(content or "").strip()
+        if not text or len(text) > 1000:
+            raise ValueError("开发手记不能为空且最多 1000 字")
+        now = time.time()
+        shas_json = json.dumps([str(item) for item in commit_shas], ensure_ascii=False)
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            if db.execute("SELECT 1 FROM qzone_devlog_posts WHERE status='draft' LIMIT 1").fetchone():
+                return None
+            cursor = db.execute(
+                "INSERT INTO qzone_devlog_posts(content,status,commit_shas,prompt,model_profile_id,generated_at) "
+                "VALUES(?,'draft',?,?,?,?)",
+                (text, shas_json, str(prompt or "")[:2000], str(model_profile_id or "")[:120], now),
+            )
+            return {
+                "id": int(cursor.lastrowid), "content": text, "status": "draft",
+                "commit_shas": shas_json, "prompt": str(prompt or ""), "model_profile_id": str(model_profile_id or ""),
+                "generated_at": now, "published_at": None, "tid": "", "last_error": "",
+            }
+
+    def devlog_draft(self) -> dict[str, Any] | None:
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT * FROM qzone_devlog_posts WHERE status='draft' ORDER BY id LIMIT 1"
+            ).fetchone()
+        return dict(row) if row else None
+
+    def devlog_posts(self, limit: int = 20) -> list[dict[str, Any]]:
+        limit = max(1, min(100, int(limit)))
+        with self._lock, self._connect() as db:
+            rows = db.execute(
+                "SELECT * FROM qzone_devlog_posts ORDER BY id DESC LIMIT ?", (limit,)
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def devlog_update_post_content(self, post_id: int, content: str) -> None:
+        text = str(content or "").strip()
+        if not text or len(text) > 1000:
+            raise ValueError("开发手记不能为空且最多 1000 字")
+        with self._lock, self._connect() as db:
+            db.execute(
+                "UPDATE qzone_devlog_posts SET content=? WHERE id=? AND status='draft'",
+                (text, int(post_id)),
+            )
+
+    def devlog_delete_post(self, post_id: int) -> None:
+        with self._lock, self._connect() as db:
+            db.execute(
+                "DELETE FROM qzone_devlog_posts WHERE id=? AND status IN ('draft','failed')",
+                (int(post_id),),
+            )
+
+    def devlog_begin_publish(self, post_id: int) -> bool:
+        """draft → publishing 的跨进程原子闸门，同一条草稿只能被一个进程发布。"""
+        with self._lock, self._connect() as db:
+            cursor = db.execute(
+                "UPDATE qzone_devlog_posts SET status='publishing' WHERE id=? AND status='draft'",
+                (int(post_id),),
+            )
+        return int(cursor.rowcount or 0) == 1
+
+    def devlog_finish_publish(self, post_id: int, tid: str) -> list[str]:
+        """发布成功：草稿转 published，并把快照里的提交标记为已发布。"""
+        now = time.time()
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT commit_shas FROM qzone_devlog_posts WHERE id=? AND status='publishing'",
+                (int(post_id),),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError("开发手记发布状态已失效")
+            try:
+                shas = [str(item) for item in json.loads(str(row["commit_shas"] or "[]"))]
+            except json.JSONDecodeError:
+                shas = []
+            cursor = db.execute(
+                "UPDATE qzone_devlog_posts SET status='published', published_at=?, tid=?, last_error='' "
+                "WHERE id=? AND status='publishing'",
+                (now, str(tid or ""), int(post_id)),
+            )
+            if int(cursor.rowcount or 0) != 1:
+                raise RuntimeError("开发手记发布状态已失效")
+            for sha in shas:
+                db.execute(
+                    "UPDATE qzone_devlog_commits SET status='published', post_id=? "
+                    "WHERE sha=? AND status='pending'",
+                    (int(post_id), sha),
+                )
+            return shas
+
+    def devlog_fail_publish(self, post_id: int, error: str, *, consume_commits: bool) -> None:
+        """发布失败：草稿转 failed；不确定超时会把提交标记 skipped，绝不自动重发。"""
+        now = time.time()
+        with self._lock, self._connect() as db:
+            db.execute("BEGIN IMMEDIATE")
+            row = db.execute(
+                "SELECT commit_shas FROM qzone_devlog_posts WHERE id=? AND status='publishing'",
+                (int(post_id),),
+            ).fetchone()
+            db.execute(
+                "UPDATE qzone_devlog_posts SET status='failed', last_error=?, published_at=? "
+                "WHERE id=? AND status='publishing'",
+                (str(error)[:500], now, int(post_id)),
+            )
+            if row is not None and consume_commits:
+                try:
+                    shas = [str(item) for item in json.loads(str(row["commit_shas"] or "[]"))]
+                except json.JSONDecodeError:
+                    shas = []
+                for sha in shas:
+                    db.execute(
+                        "UPDATE qzone_devlog_commits SET status='skipped' WHERE sha=? AND status='pending'",
+                        (sha,),
+                    )
+
+    def devlog_count_published_since(self, since: float) -> int:
+        with self._lock, self._connect() as db:
+            row = db.execute(
+                "SELECT COUNT(*) AS count FROM qzone_devlog_posts WHERE status='published' AND published_at>=?",
+                (float(since),),
             ).fetchone()
         return int(row["count"] if row else 0)
 
