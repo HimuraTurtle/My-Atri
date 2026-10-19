@@ -273,6 +273,19 @@ class BotConfig:
     what_to_eat_rate_limit_window_seconds: int = 60
     # 复读后冷却期内强制推荐，防 Bot 之间互相复读循环。
     what_to_eat_echo_cooldown_seconds: int = 15
+    # 屏幕看护（自建轻量实时监控）：1fps 帧差分采样，画面语义变化时
+    # 调用视觉模型生成摘要；指令层（看看我屏幕等）独立于后台监控开关。
+    screen_watch_enabled: bool = True
+    # 后台实时监控总开关：关闭时仅保留主人指令能力。
+    screen_watch_monitor_enabled: bool = False
+    # 差分采样间隔（秒），决定「实时」感知粒度。
+    screen_watch_interval_seconds: float = 1.0
+    # 帧差分灰度均值阈值：越小越灵敏（弹窗闪烁易误触）。
+    screen_watch_diff_threshold: float = 8.0
+    # 两次视觉调用间的最小间隔（秒）：视频/游戏持续变化时防止烧 API。
+    screen_watch_cooldown_seconds: float = 120.0
+    # 持续变化退避的上限（秒）：高频触发时冷却指数增长到此封顶。
+    screen_watch_backoff_max_seconds: float = 300.0
     # Who Is Who 群聊共享上下文（移植自 astrbot_plugin_who_is_who）：
     # 本地规则记录群成员身份/称呼/话题/承诺，回复前注入共享上下文，
     # 不增加额外 LLM 调用。

@@ -21,6 +21,7 @@ data/minimax_draw/
 data/memes/
 data/bilibili/
 data/who_is_who/
+data/screen_watch/
 data/qzone_automation.sqlite3
 data/**/*.sqlite3
 data/**/*.sqlite3-wal

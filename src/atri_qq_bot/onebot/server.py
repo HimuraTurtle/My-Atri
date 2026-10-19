@@ -102,6 +102,7 @@ from .server_parts.server_manga import OneBotMangaMixin
 from .server_parts.server_meme_stealer import OneBotMemeStealMixin
 from .server_parts.server_minimax_draw import OneBotMinimaxDrawMixin
 from .server_parts.server_proactive import OneBotProactiveMixin
+from .server_parts.server_screen_watch import OneBotScreenWatchMixin
 from .server_parts.server_what_to_eat import OneBotWhatToEatMixin
 from .server_parts.server_who_is_who import OneBotWhoIsWhoMixin
 
@@ -119,6 +120,7 @@ class OneBotServer(
     OneBotWhoIsWhoMixin,
     OneBotMemeStealMixin,
     OneBotProactiveMixin,
+    OneBotScreenWatchMixin,
 ):
     """OneBot v11 的接入适配器。
 
@@ -156,6 +158,7 @@ async def run_server(config: Any) -> None:
         meme_task = asyncio.create_task(server.meme_learning_loop())
         manga_task = asyncio.create_task(server.manga_update_loop())
         goodnight_task = asyncio.create_task(server.goodnight_loop())
+        screen_watch_task = asyncio.create_task(server.screen_watch_loop())
         webui_server = await start_webui(config, server)
         try:
             await asyncio.Future()
@@ -168,6 +171,7 @@ async def run_server(config: Any) -> None:
             meme_task.cancel()
             manga_task.cancel()
             goodnight_task.cancel()
+            screen_watch_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_task
             with contextlib.suppress(asyncio.CancelledError):
@@ -182,6 +186,8 @@ async def run_server(config: Any) -> None:
                 await manga_task
             with contextlib.suppress(asyncio.CancelledError):
                 await goodnight_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await screen_watch_task
             await server.shutdown()
             if getattr(server, "_manga_service", None) is not None:
                 with contextlib.suppress(Exception):
