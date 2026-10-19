@@ -166,6 +166,13 @@ class OneBotEventMixin(OneBotServerMixin):
         ):
             return
 
+        # 屏幕看护指令（主人限定）：确定性入口，同样门控前拦截，
+        # 主人在群里不 @ 也能调用；视觉失败时坦诚降级，不编造内容。
+        if is_message and await self._maybe_handle_screen_watch_command(
+            websocket, event, plain_text, conversation_id
+        ):
+            return
+
         if not should_send_reply:
             return
 

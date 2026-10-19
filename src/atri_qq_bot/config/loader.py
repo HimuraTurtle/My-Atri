@@ -365,6 +365,20 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
             500, _env_int("BILIBILI_AI_TOOL_MAX_CHARS", 4000)
         ),
         what_to_eat_enabled=_env_bool("WHAT_TO_EAT_ENABLED", True),
+        screen_watch_enabled=_env_bool("SCREEN_WATCH_ENABLED", True),
+        screen_watch_monitor_enabled=_env_bool("SCREEN_WATCH_MONITOR_ENABLED", False),
+        screen_watch_interval_seconds=max(
+            1.0, _env_float("SCREEN_WATCH_INTERVAL_SECONDS", 1.0)
+        ),
+        screen_watch_diff_threshold=max(
+            2.0, _env_float("SCREEN_WATCH_DIFF_THRESHOLD", 8.0)
+        ),
+        screen_watch_cooldown_seconds=max(
+            30.0, _env_float("SCREEN_WATCH_COOLDOWN_SECONDS", 120.0)
+        ),
+        screen_watch_backoff_max_seconds=max(
+            60.0, _env_float("SCREEN_WATCH_BACKOFF_MAX_SECONDS", 300.0)
+        ),
         what_to_eat_trigger_keywords=_env_str_tuple(
             "WHAT_TO_EAT_TRIGGER_KEYWORDS", ("吃什么", "吃啥")
         ),
