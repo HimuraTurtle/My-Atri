@@ -29,6 +29,7 @@ def _append_session_l3(
     text: str,
     now: float,
     memory: dict[str, Any] | None = None,
+    actor_name: str | None = None,
 ) -> None:
     if _is_noisy_for_long_memory(text):
         return
@@ -47,6 +48,10 @@ def _append_session_l3(
         "at": now,
         "updated_at": now,
     }
+    if actor_name:
+        # 群主会话的 L3 混着所有人的发言；不带归属渲染时会把 A 说的话
+        # 安到当前说话的 B 头上（张冠李戴的直接来源之一）。
+        entry["actor_name"] = str(actor_name)
     items.append(entry)
     session_l3[conversation_id] = items[-8:]
     if memory is not None:
@@ -60,18 +65,23 @@ def _remember_structured_from_user(
     affection_event: dict[str, Any] | None = None,
     visibility: str = "private",
     source_context: str | None = None,
+    actor_name: str | None = None,
 ) -> None:
     # 结构化记忆采用“先纠正冲突 -> 过滤噪声 -> 抽取 L2 事件/L1 特征 -> 建立关联”
     # 的顺序。L3 是会话滚动窗口，不在这里被误写成永久用户画像。
+    # 群主会话的消息来自不同群友，条目必须带 actor_name 归属，否则渲染
+    # 注入时“用户生日/用户喜欢”会张冠李戴到当前说话的群友头上。
     memory = _ensure_structured_memory(item)
     _apply_user_corrections(memory, text, now)
     style_candidate = _actionable_style_candidate(text, now, visibility, source_context)
+    if style_candidate and actor_name:
+        style_candidate["actor_name"] = str(actor_name)
     style_memory_id = _upsert_l1_candidate(memory, style_candidate, now) if style_candidate else None
     if _is_negative_quality_complaint(text):
         if style_memory_id:
             _link_related_memories(memory, [style_memory_id])
         return
-    _remember_important_interaction(item, text, now, affection_event)
+    _remember_important_interaction(item, text, now, affection_event, actor_name=actor_name)
 
     if _is_noisy_for_long_memory(text):
         if style_memory_id:
@@ -81,12 +91,16 @@ def _remember_structured_from_user(
     new_ids: list[str] = [style_memory_id] if style_memory_id else []
     current_affection = float(item.get("affection_score", DEFAULT_AFFECTION))
     for event in _extract_l2_events(text, now, visibility, source_context):
+        if actor_name:
+            event["actor_name"] = str(actor_name)
         _attach_affection_metadata(event, affection_event, current_affection)
         memory_id = _upsert_l2(memory, event, now)
         if memory_id:
             new_ids.append(memory_id)
 
     for candidate in _extract_l1_candidates(text, now, visibility, source_context):
+        if actor_name:
+            candidate["actor_name"] = str(actor_name)
         _attach_affection_metadata(candidate, affection_event, current_affection)
         memory_id = _upsert_l1_candidate(memory, candidate, now)
         if memory_id:
@@ -394,6 +408,7 @@ def _upsert_l1_candidate(
             "affection_snapshot",
             "visibility",
             "source_context",
+            "actor_name",
         ):
             if meta_key in pending:
                 promoted[meta_key] = pending[meta_key]
@@ -419,7 +434,7 @@ def _upsert_l2(memory: dict[str, Any], event: dict[str, Any], now: float) -> str
         existing["updated_at"] = now
         existing["last_mentioned_at"] = now
         existing["state"] = "active"
-        for meta_key in ("visibility", "source_context"):
+        for meta_key in ("visibility", "source_context", "actor_name"):
             if meta_key in event:
                 existing[meta_key] = event[meta_key]
         return existing["id"]

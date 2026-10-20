@@ -314,12 +314,25 @@ class EngineToolsMixin(PersonaEngineMixin):
                 }
             )
         if nickname:
-            messages.append(
-                {
-                    "role": "system",
-                    "content": f"当前正在和昵称为“{nickname}”的用户聊天。称呼可以自然一点，不要每句都叫昵称。",
-                }
-            )
+            if conversation_id.startswith("group:"):
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": (
+                            f"群里当前正在说话的是昵称为“{nickname}”的群友。"
+                            "上下文里其他群友的发言、行为和记忆都属于各自本人，"
+                            "绝对不要安到当前说话的这位群友头上；"
+                            "称呼可以自然一点，不要每句都叫昵称。"
+                        ),
+                    }
+                )
+            else:
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"当前正在和昵称为“{nickname}”的用户聊天。称呼可以自然一点，不要每句都叫昵称。",
+                    }
+                )
         if not human_pipeline and not visual_turn:
             messages.extend(self._history[conversation_id])
         if tool_context is not None:
