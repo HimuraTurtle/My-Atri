@@ -497,6 +497,8 @@ class EngineToolsMixin(PersonaEngineMixin):
             return await self._execute_minimax_draw_tool(conversation_id, arguments, config)
         if name == "fact_check":
             return await self._execute_fact_check_tool(arguments, config)
+        if name == "search_papers":
+            return await self._execute_paper_search_tool(arguments, config)
         return None
 
     async def _execute_fact_check_tool(
@@ -529,6 +531,32 @@ class EngineToolsMixin(PersonaEngineMixin):
             )
         except Exception as exc:
             return f"事实核查执行失败：{exc}。不要编造核查结论。"
+        return _json.dumps(data, ensure_ascii=False)
+
+    async def _execute_paper_search_tool(
+        self,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import json as _json
+
+        from ..papers import get_papers_service
+
+        service = get_papers_service(config)
+        if service is None:
+            return "论文检索功能未启用，请凭已有知识谨慎回答并注明不确定。"
+        query = str(arguments.get("query") or "").strip()
+        if not query:
+            return "query 为空。请提供学术检索关键词后重新调用。"
+        try:
+            limit = int(arguments.get("limit") or 5)
+        except (TypeError, ValueError):
+            limit = 5
+        sort = str(arguments.get("sort") or "relevance")
+        try:
+            data = await service.search(query, limit=limit, sort=sort)
+        except Exception as exc:
+            return f"论文检索执行失败：{exc}。不要编造论文，坦诚说明没查到。"
         return _json.dumps(data, ensure_ascii=False)
 
     async def _execute_minimax_draw_tool(

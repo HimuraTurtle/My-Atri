@@ -222,6 +222,10 @@ class BotConfig:
     # LLM 规划 → Bocha 搜索取证 → LLM 三态裁决（真/假/无法核实）。
     isittrue_enabled: bool = False
     isittrue_timeout_seconds: float = 120.0
+    # 学术文献检索：search_papers 工具，OpenAlex 免 key 全学科文献库，
+    # 用户找论文/文献/研究进展时由聊天模型自主调用。
+    papers_enabled: bool = True
+    papers_timeout_seconds: float = 30.0
     # 热梗自动学习：定时抓取热搜并用聊天模型精选，聊天时注入最新梗。
     meme_learning_enabled: bool = True
     meme_learning_interval_hours: int = 6
