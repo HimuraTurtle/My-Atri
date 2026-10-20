@@ -398,6 +398,158 @@ def _normalize_for_compare(text: str) -> str:
     return re.sub(r"\s+", "", text.lower())
 
 
+def _relative_time_label(at: float | None, *, now: float | None = None) -> str:
+    """历史时间戳的口语标签：[刚刚]/[X分钟前]/[X小时前]；None 或异常返回空。"""
+    if at is None:
+        return ""
+    try:
+        age = float(now if now is not None else _core.time.time()) - float(at)
+    except (TypeError, ValueError):
+        return ""
+    if age < 30.0:
+        return ""
+    if age < 60.0:
+        return "[刚刚]"
+    minutes = int(age // 60)
+    if minutes < 60:
+        return f"[{minutes}分钟前]"
+    hours = minutes // 60
+    if hours < 24:
+        return f"[{hours}小时前]"
+    return f"[{hours // 24}天前]"
+
+
+_TASK_VERB_CHARS = "查搜做看总结解析检索识别核对"
+# 同族动词互认：她常把「查/搜/检索/找」混用，账本摘要用哪个字都要能对上。
+_VERB_FAMILY = {
+    "查": "查搜检找",
+    "搜": "查搜检找",
+    "检": "查搜检找",
+    "找": "查搜检找",
+    "总": "总结",
+    "结": "总结",
+    "解": "解析",
+    "析": "解析",
+    "识": "识别",
+    "别": "识别",
+    "核": "核对",
+    "看": "看查",
+    "做": "做",
+}
+_TODO_CLAIM_PATTERNS = (
+    re.compile(
+        r"(?:还没|尚未|没来得及|没有)" + f"((?:帮你)?[{_TASK_VERB_CHARS}])"
+    ),
+    re.compile(
+        r"(?:这就|马上|待会儿|等下|稍后|回头|等一会儿)(?:去|来|再)?"
+        + f"(?:帮你)?([{_TASK_VERB_CHARS}])"
+    ),
+)
+_TOPIC_FILLER_LEAD = re.compile(r"^[呢哦呀啦嘛咯啊嗯哈的吧，。！？!?；;、,.\s]+")
+# 话题前置句式里引导「这就去搜/马上查」的尾巴词（从话题主体剥离）。
+_TOPIC_TRAIL_STRIP = re.compile(r"[我你咱他它就再先也还直的你一]+$")
+_TOPIC_CONNECTIVE_LEAD = "光可就但而那你我也都先再又不过的话别急哦呀"
+
+
+def _extract_todo_claims(text: str) -> list[tuple[str, str]]:
+    """从回复中提取「声称待办」：(话题片段或空串, 动词首字)。
+
+    话题双向探测：中文里话题常前置（「瑞士轮的对阵我这就去搜」），
+    也常后置（「这就去搜瑞士轮」）。后向提取失败（语气词/连接词
+    开头）时回看动词前的片段并剥掉引导尾巴。提取不到明确话题视为
+    泛指（「还没查呢」），走"近期同动作"判定。提取错误的代价只是
+    漏拦放行，不会误拦——安全方向。
+    """
+    claims: list[tuple[str, str]] = []
+    for pattern in _TODO_CLAIM_PATTERNS:
+        for match in pattern.finditer(text):
+            verb = match.group(1) or ""
+            if not verb:
+                continue
+            raw_topic = text[match.end() : match.end() + 12]
+            topic = _TOPIC_FILLER_LEAD.sub("", raw_topic)
+            if topic and topic[0] in _TOPIC_CONNECTIVE_LEAD:
+                topic = ""
+            if not topic:
+                before = text[max(0, match.start() - 12) : match.start()]
+                before = _TOPIC_FILLER_LEAD.sub("", before[::-1])[::-1]
+                before = _TOPIC_TRAIL_STRIP.sub("", before[::-1])[::-1]
+                topic = before.strip("，。！？!?；;、,. \n")
+            claims.append((topic, verb[0]))
+    return claims
+
+
+def _completed_task_contradiction(
+    reply_text: str,
+    completed_actions: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+) -> str:
+    """回复把「已完成的动作」说成待办时，返回账本事实摘要；否则空串。
+
+    纯规则判定（零 LLM 成本）：命中「声称待办」话术后，仅在账本里确实
+    存在近期同话题完成记录（bigram 重叠≥2），或 5 分钟内完成过同族动词
+    动作时，才认定矛盾。找不到账本证据就不拦——允许她如实说"还没查过"。
+    """
+    text = str(reply_text or "")
+    if not text or not completed_actions:
+        return ""
+    claims = _extract_todo_claims(text)
+    if not claims:
+        return ""
+
+    current = float(now if now is not None else _core.time.time())
+
+    def _bigrams(value: str) -> set[str]:
+        compact = re.sub(r"[\s，。！？!?；;：:、,.]+", "", value)
+        return {compact[i : i + 2] for i in range(len(compact) - 1)}
+
+    matched: list[str] = []
+    for topic, verb_char in claims:
+        verb_family = _VERB_FAMILY.get(verb_char, verb_char)
+        topic_grams = _bigrams(topic) if topic else set()
+        for entry in completed_actions:
+            summary = str(entry.get("text") or "")
+            if not summary:
+                continue
+            contradiction = False
+            if topic:
+                contradiction = len(topic_grams & _bigrams(summary)) >= 2
+            else:
+                age = current - float(entry.get("at") or 0.0)
+                contradiction = age <= 300.0 and any(
+                    family_char in summary for family_char in verb_family
+                )
+            if contradiction and summary not in matched:
+                matched.append(summary)
+                break
+    if not matched:
+        return ""
+    return "；".join(f"「{item}」" for item in matched[:3])
+
+
+def _completed_actions_prompt(
+    completed_actions: list[dict[str, Any]],
+    *,
+    now: float | None = None,
+) -> str:
+    """把任务账本渲染成一段系统上下文；空账本返回空串（方案一）。"""
+    lines: list[str] = []
+    for entry in completed_actions:
+        text = str(entry.get("text") or "").strip()
+        if not text:
+            continue
+        label = _relative_time_label(entry.get("at"), now=now)
+        lines.append(f"- {label}{text}" if label else f"- {text}")
+    if not lines:
+        return ""
+    return (
+        "以下动作最近已经真实完成，结果也已经发给用户。"
+        "不要把它们再说成还没做、待会儿再做，也不要为已完成的动作重复调用工具：\n"
+        + "\n".join(lines)
+    )
+
+
 def _has_abstract_trigger(text: str) -> bool:
     cleaned = re.sub(r"@\d{5,}", "", text)
     for word in ABSTRACT_TRIGGER_WORDS:

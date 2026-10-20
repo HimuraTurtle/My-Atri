@@ -7,7 +7,65 @@ from .engine_support import PersonaEngineMixin
 LOGGER = logging.getLogger("atri.persona")
 
 
+def _tool_action_summary(name: str, arguments: dict[str, Any]) -> str:
+    """工具成功回执 → 账本摘要。摘要要带话题词，方便后续 bigram 对账。"""
+    query = str(arguments.get("query") or arguments.get("keywords") or "").strip()
+    if name == "search_web":
+        return f"搜索了「{query[:40]}」" if query else "搜索了网页资料"
+    if name == "open_web_page":
+        url = str(arguments.get("url") or "").strip()
+        return f"查看了网页 {url[:60]}" if url else "查看了网页"
+    if name == "get_weather":
+        city = str(arguments.get("city") or "").strip()
+        return f"查了「{city[:20]}」的天气" if city else "查了天气"
+    if name == "get_current_time":
+        return "查看了当前时间"
+    if name == "recall_long_term_memory":
+        return f"检索了记忆「{query[:40]}」" if query else "检索了记忆"
+    if name == "search_papers":
+        return f"检索了论文「{query[:40]}」" if query else "检索了论文"
+    if name == "bilibili_read":
+        video = str(arguments.get("video") or "").strip()
+        return f"解析了B站视频 {video[:40]}" if video else "解析了B站视频"
+    if name == "fact_check":
+        claim = str(arguments.get("claim") or "").strip()
+        return f"核查了「{claim[:40]}」" if claim else "核查了一个说法"
+    if name.startswith("suwayomi_search"):
+        return f"查找了漫画「{query[:40]}」" if query else "查找了漫画"
+    if name == "suwayomi_get_chapters":
+        return "查了漫画的章节列表"
+    if name == "suwayomi_send_chapter":
+        return "受理了漫画章节发送（系统会自动下载送达）"
+    if name == "draw_image":
+        prompt = str(arguments.get("prompt") or "").strip()
+        return f"画了「{prompt[:40]}」" if prompt else "画了一张图"
+    if name.startswith("anima_"):
+        return "调用了绘画助手"
+    return f"完成了 {name} 工具调用"
+
+
 class EngineToolsMixin(PersonaEngineMixin):
+    def _record_completed_actions(self, conversation_id: str, receipts: Any) -> None:
+        """成功的工具回执写入任务账本（方案一），并留一份单轮观测信号。"""
+        for receipt in receipts or ():
+            if not getattr(receipt, "ok", False):
+                continue
+            name = str(getattr(receipt, "name", "") or "")
+            summary = _tool_action_summary(
+                name, dict(getattr(receipt, "arguments", None) or {})
+            )
+            if not summary:
+                continue
+            self.memory.record_completed_action(
+                conversation_id, summary, action=name[:32]
+            )
+            self.note_turn_tool_call(
+                conversation_id,
+                name,
+                True,
+                int(getattr(receipt, "elapsed_ms", 0) or 0),
+            )
+
     async def _reply_with_api(
         self,
         conversation_id: str,
@@ -97,6 +155,13 @@ class EngineToolsMixin(PersonaEngineMixin):
                 ),
             }
         )
+        # 任务账本（方案一）：把近期真实完成的动作带相对时间标签注入，
+        # 让模型分清"刚做过什么"和"还没做什么"，从源头压住时序错乱。
+        ledger_prompt = _completed_actions_prompt(
+            self.memory.recent_completed_actions(conversation_id, limit=4)
+        )
+        if ledger_prompt:
+            messages.append({"role": "system", "content": ledger_prompt})
         human_pipeline = bool(getattr(self.config, "human_reply_pipeline_enabled", True))
         if profile and not visual_turn:
             topics = "" if human_pipeline else "、".join(profile.get("topic_words") or [])
@@ -323,6 +388,7 @@ class EngineToolsMixin(PersonaEngineMixin):
                     payload,
                     context_id=conversation_id,
                 )
+            self._record_completed_actions(conversation_id, result.tool_receipts)
             return result.reply_text
 
         content = ""
@@ -464,6 +530,7 @@ class EngineToolsMixin(PersonaEngineMixin):
                     receipts=round_receipts,
                 )
                 receipts.extend(round_receipts)
+                self._record_completed_actions(conversation_id, round_receipts)
                 external_calls += 1
                 force_final_answer = external_calls >= max_external_calls
 

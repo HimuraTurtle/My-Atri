@@ -69,6 +69,7 @@ class OneBotMangaMixin(OneBotServerMixin):
             delivered_text or "[漫画助手回复]",
             any(message.kind in {"image", "file"} for message in result.messages),
         )
+        self._record_manga_command_action(conversation_id, plain_text)
 
         for tmp_dir in result.cleanup_dirs:
             from ...manga.downloader import schedule_cleanup
@@ -79,6 +80,35 @@ class OneBotMangaMixin(OneBotServerMixin):
             with contextlib.suppress(Exception):
                 await self._deliver_manga_notification(websocket, notification)
         return True
+
+    _MANGA_LEDGER_SUBCOMMANDS = ("阅读", "下载", "搜索", "章节")
+
+    def _record_manga_command_action(
+        self, conversation_id: str, plain_text: str
+    ) -> None:
+        """有实体产出的漫画子命令写入任务账本（方案一）。
+
+        阅读/下载/搜索/章节是会被后续聊天引用的动作；帮助、订阅列表等
+        纯查询型命令不记，避免账本被低价值条目挤占。
+        """
+        from ...bilibili.parsing import strip_address_prefix
+
+        body = strip_address_prefix(plain_text).strip()
+        if not body.startswith("漫画"):
+            return
+        rest = body[2:].strip()
+        for word in self._MANGA_LEDGER_SUBCOMMANDS:
+            if rest.startswith(word):
+                topic = rest[len(word) :].strip()[:40]
+                summary = (
+                    f"做了漫画「{topic}」的{word}"
+                    if topic
+                    else f"做了漫画{word}"
+                )
+                self.reply_engine.record_completed_action(
+                    conversation_id, summary, action=f"manga_{word}"
+                )
+                return
 
     async def _send_manga_text(self, websocket: Any, event: dict[str, Any], text: str) -> None:
         try:

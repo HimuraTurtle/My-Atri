@@ -72,6 +72,13 @@ class OneBotBilibiliMixin(OneBotServerMixin):
         self._mark_smart_group_reply(event, conversation_id, plain_text)
         reply_text = result.record_reply_text or "[B站助手回复]"
         self.reply_engine.record_bot_reply(conversation_id, reply_text, False)
+        # 总结命令写入任务账本，防止聊天模型后续把“已总结”说成待办。
+        if self._bilibili_is_summary_command(plain_text):
+            video_ref = self._bilibili_video_ref(plain_text)
+            summary = f"总结了B站视频 {video_ref}".rstrip()
+            self.reply_engine.record_completed_action(
+                conversation_id, summary, action="bilibili_summary"
+            )
         return True
 
     async def _maybe_auto_summarize_bilibili(
@@ -105,6 +112,11 @@ class OneBotBilibiliMixin(OneBotServerMixin):
         self._mark_smart_group_reply(event, conversation_id, plain_text)
         reply_text = result.record_reply_text or "[B站视频总结]"
         self.reply_engine.record_bot_reply(conversation_id, reply_text, False)
+        video_ref = self._bilibili_video_ref(plain_text)
+        summary = f"总结了B站视频 {video_ref}".rstrip()
+        self.reply_engine.record_completed_action(
+            conversation_id, summary, action="bilibili_auto_summary"
+        )
         return True
 
     @staticmethod
@@ -114,6 +126,13 @@ class OneBotBilibiliMixin(OneBotServerMixin):
 
         stripped = strip_address_prefix(plain_text)
         return any(stripped.startswith(prefix) for prefix in SUMMARY_PREFIXES)
+
+    @staticmethod
+    def _bilibili_video_ref(plain_text: str) -> str:
+        import re
+
+        match = re.search(r"(BV[0-9A-Za-z]{8,12}|https?://\S+)", plain_text)
+        return match.group(1)[:80] if match else ""
 
     async def _send_bilibili_text(self, websocket: Any, event: dict[str, Any], text: str) -> None:
         from ...message_plan.schema import OutgoingMessage

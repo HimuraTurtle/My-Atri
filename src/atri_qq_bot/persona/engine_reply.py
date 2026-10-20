@@ -18,6 +18,8 @@ class EngineReplyMixin(PersonaEngineMixin):
         # 主流程遵循“清洗输入 -> 记录记忆 -> 确定性分支/安全兜底
         # -> 组织模型上下文 -> 校验输出”，便于定位每个阶段的责任。
         self._pending_reply_failures.pop(conversation_id, None)
+        self._turn_tool_calls.pop(conversation_id, None)
+        self._turn_contradictions.pop(conversation_id, None)
         clean_text = user_text.strip()
         if not clean_text:
             clean_text = "（用户发来了一条空消息）"
@@ -170,6 +172,56 @@ class EngineReplyMixin(PersonaEngineMixin):
                         api_reply = reality_reply
                     else:
                         raise RuntimeError("模型连续生成未经证实的现实断言")
+                # 自洽审查（方案二）：回复把账本里已完成的动作说成待办时，
+                # 注入账本事实重写一次。纯规则判定零成本；查无实据不拦，
+                # 重写失败也不丢回复（漏拦放行的安全方向）。
+                ledger_actions = (
+                    self.memory.recent_completed_actions(conversation_id)
+                    if human_pipeline
+                    else []
+                )
+                ledger_facts = (
+                    _completed_task_contradiction(api_reply, ledger_actions)
+                    if ledger_actions
+                    else ""
+                )
+                if ledger_facts:
+                    ledger_rewrite_prompt = (
+                        "上一条候选回复把已经完成的动作说成了还没做或待会儿再做，"
+                        f"但这些动作其实已经完成：{ledger_facts}。"
+                        "请自然重写：如实承认已经做完，并基于已完成的结果继续回应用户；"
+                        "不要承诺稍后再做，也不要重新执行已经完成的动作。"
+                        "不要解释内部检查过程，只输出最终回复。\n\n"
+                        f"待修正回复：{api_reply}"
+                    )
+                    ledger_reply = await self._reply_with_guarded_api(
+                        conversation_id,
+                        clean_text,
+                        nickname,
+                        extra_system="\n\n".join(
+                            part
+                            for part in (
+                                context_system,
+                                COMFORT_REPAIR_PROMPT if repair_mode else None,
+                                ledger_rewrite_prompt,
+                            )
+                            if part
+                        ),
+                        profile_id=profile_id,
+                        profile=profile,
+                        context_profile=context_profile,
+                        iteration_decision=iteration_decision,
+                        tool_context=tool_context,
+                        reply_focus=reply_focus,
+                    )
+                    ledger_resolved = bool(ledger_reply) and not (
+                        _completed_task_contradiction(ledger_reply, ledger_actions)
+                    )
+                    if ledger_reply:
+                        api_reply = ledger_reply
+                    self.note_turn_contradiction(
+                        conversation_id, ledger_facts, ledger_resolved
+                    )
                 grounding_check = getattr(
                     tool_context,
                     "needs_grounding_repair",
