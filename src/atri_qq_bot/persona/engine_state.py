@@ -24,6 +24,10 @@ class EngineStateMixin(PersonaEngineMixin):
         # 回复失败是运行态信号，不是聊天内容。OneBot 层消费后只记录日志/评测，
         # 绝不把异常文案、固定模板或伪装成人格回复的兜底发给用户。
         self._pending_reply_failures: dict[str, str] = {}
+        # 单轮观测信号（方案三）：本轮工具回执与账本矛盾审查结果，
+        # 每轮 reply() 开始时清空，OneBot 层写入 reply-events.jsonl 后即弃用。
+        self._turn_tool_calls: dict[str, list[dict[str, Any]]] = {}
+        self._turn_contradictions: dict[str, list[dict[str, Any]]] = {}
         self._cognition_store: CognitionStateStore | None = None
         if bool(getattr(config, "cognition_shadow_enabled", False)):
             try:
@@ -107,6 +111,44 @@ class EngineStateMixin(PersonaEngineMixin):
 
     def profile_for(self, conversation_id: str) -> dict[str, Any]:
         return self.memory.profile(conversation_id)
+
+    def record_completed_action(
+        self, conversation_id: str, summary: str, *, action: str = ""
+    ) -> None:
+        """任务账本写入的稳定接口：确定性命令层也经由此处记账。"""
+        self.memory.record_completed_action(conversation_id, summary, action=action)
+
+    def note_turn_tool_call(
+        self, conversation_id: str, name: str, ok: bool, elapsed_ms: int
+    ) -> None:
+        self._turn_tool_calls.setdefault(conversation_id, []).append(
+            {"name": str(name), "ok": bool(ok), "elapsed_ms": int(elapsed_ms)}
+        )
+
+    def note_turn_contradiction(
+        self, conversation_id: str, facts: str, resolved: bool
+    ) -> None:
+        self._turn_contradictions.setdefault(conversation_id, []).append(
+            {"facts": str(facts)[:200], "resolved": bool(resolved)}
+        )
+
+    def turn_diagnostics_snapshot(self, conversation_id: str) -> dict[str, Any]:
+        """单轮观测快照：工具回执、账本矛盾审查与当前账本内容。"""
+        return {
+            "tool_calls": list(self._turn_tool_calls.get(conversation_id, [])),
+            "contradiction_checks": list(
+                self._turn_contradictions.get(conversation_id, [])
+            ),
+            "ledger_snapshot": [
+                {
+                    "text": str(entry.get("text") or ""),
+                    "action": str(entry.get("action") or ""),
+                }
+                for entry in self.memory.recent_completed_actions(
+                    conversation_id, limit=6
+                )
+            ],
+        }
 
     def record_bot_reply(
         self,

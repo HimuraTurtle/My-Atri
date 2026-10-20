@@ -483,6 +483,20 @@ class OneBotProactiveMixin(OneBotServerMixin):
         failure_reason: str = "",
     ) -> None:
         with contextlib.suppress(Exception):
+            # 方案三观测维度：本轮工具回执、账本矛盾审查与账本快照，
+            # 由回复引擎按会话暂存，写日志时拉取，错过即弃。
+            # reply_engine 用防御式读取：裸实例（测试桩）下照常写核心字段。
+            reply_engine = getattr(self, "reply_engine", None)
+            diagnostics_getter = (
+                getattr(reply_engine, "turn_diagnostics_snapshot", None)
+                if reply_engine is not None
+                else None
+            )
+            turn_diagnostics = (
+                diagnostics_getter(conversation_id)
+                if callable(diagnostics_getter)
+                else {}
+            )
             payload = {
                 "time": _now_text(),
                 "conversation_id": conversation_id,
@@ -497,6 +511,9 @@ class OneBotProactiveMixin(OneBotServerMixin):
                 "reply_focus_source": reply_focus_source,
                 "reply_focus_text": str(reply_focus_text or "")[:400],
                 "quoted_message_id": str(quoted_message_id or ""),
+                "tool_calls": turn_diagnostics.get("tool_calls") or [],
+                "contradiction_checks": turn_diagnostics.get("contradiction_checks") or [],
+                "ledger_snapshot": turn_diagnostics.get("ledger_snapshot") or [],
                 "status": str(status or "delivered"),
                 "failure_reason": str(failure_reason or "")[:800],
             }
