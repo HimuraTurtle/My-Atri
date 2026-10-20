@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 from .capture import capture_screen, encode_jpeg, gray_small
+from .party import WatchParty
 from .privacy import PauseFlag, active_window_title, is_sensitive_title
 from .store import ScreenWatchStore
 from .trigger import FrameTrigger
@@ -22,6 +23,7 @@ __all__ = [
     "capture_screen",
     "encode_jpeg",
     "gray_small",
+    "WatchParty",
     "PauseFlag",
     "active_window_title",
     "is_sensitive_title",

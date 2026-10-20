@@ -159,6 +159,7 @@ async def run_server(config: Any) -> None:
         manga_task = asyncio.create_task(server.manga_update_loop())
         goodnight_task = asyncio.create_task(server.goodnight_loop())
         screen_watch_task = asyncio.create_task(server.screen_watch_loop())
+        watch_party_task = asyncio.create_task(server.watch_party_loop())
         webui_server = await start_webui(config, server)
         try:
             await asyncio.Future()
@@ -172,6 +173,7 @@ async def run_server(config: Any) -> None:
             manga_task.cancel()
             goodnight_task.cancel()
             screen_watch_task.cancel()
+            watch_party_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_task
             with contextlib.suppress(asyncio.CancelledError):
@@ -188,6 +190,8 @@ async def run_server(config: Any) -> None:
                 await goodnight_task
             with contextlib.suppress(asyncio.CancelledError):
                 await screen_watch_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await watch_party_task
             await server.shutdown()
             if getattr(server, "_manga_service", None) is not None:
                 with contextlib.suppress(Exception):

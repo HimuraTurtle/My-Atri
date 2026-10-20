@@ -290,6 +290,17 @@ class BotConfig:
     screen_watch_cooldown_seconds: float = 120.0
     # 持续变化退避的上限（秒）：高频触发时冷却指数增长到此封顶。
     screen_watch_backoff_max_seconds: float = 300.0
+    # 围观模式：主人说「看着我xx」后，ATRI 持续看屏并向该会话发围观短评；
+    # 也允许 ATRI 检测到主人的活动宣告后主动围观。结束由主人话语触发。
+    screen_watch_party_enabled: bool = True
+    # 围观评论的最小间隔（秒）：画面显著变化才评，且至少隔这么久。
+    screen_watch_party_min_interval_seconds: float = 180.0
+    # 围观循环的采样间隔（秒）：比入库监控粗，confirm 需要连续两帧变化。
+    screen_watch_party_sample_seconds: float = 10.0
+    # 连续截图/视觉失败达到该次数自动收工（坦诚告知，不空转）。
+    screen_watch_party_max_failures: int = 5
+    # 主动围观分类的冷却（秒）：控制活动宣告识别的 LLM 调用频率。
+    screen_watch_party_announce_cooldown_seconds: float = 600.0
     # Who Is Who 群聊共享上下文（移植自 astrbot_plugin_who_is_who）：
     # 本地规则记录群成员身份/称呼/话题/承诺，回复前注入共享上下文，
     # 不增加额外 LLM 调用。

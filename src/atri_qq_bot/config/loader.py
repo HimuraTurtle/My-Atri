@@ -383,6 +383,19 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         screen_watch_backoff_max_seconds=max(
             60.0, _env_float("SCREEN_WATCH_BACKOFF_MAX_SECONDS", 300.0)
         ),
+        screen_watch_party_enabled=_env_bool("SCREEN_WATCH_PARTY_ENABLED", True),
+        screen_watch_party_min_interval_seconds=max(
+            30.0, _env_float("SCREEN_WATCH_PARTY_MIN_INTERVAL_SECONDS", 180.0)
+        ),
+        screen_watch_party_sample_seconds=max(
+            5.0, _env_float("SCREEN_WATCH_PARTY_SAMPLE_SECONDS", 10.0)
+        ),
+        screen_watch_party_max_failures=max(
+            1, _env_int("SCREEN_WATCH_PARTY_MAX_FAILURES", 5)
+        ),
+        screen_watch_party_announce_cooldown_seconds=max(
+            60.0, _env_float("SCREEN_WATCH_PARTY_ANNOUNCE_COOLDOWN_SECONDS", 600.0)
+        ),
         what_to_eat_trigger_keywords=_env_str_tuple(
             "WHAT_TO_EAT_TRIGGER_KEYWORDS", ("吃什么", "吃啥")
         ),
