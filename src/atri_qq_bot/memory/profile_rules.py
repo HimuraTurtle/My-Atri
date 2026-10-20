@@ -204,6 +204,33 @@ def _format_recall_context(profile: dict[str, Any], user_text: str) -> str:
         for entry in list(structured.get("l3") or [])[-3:]
         if not is_memory_pollution_text(str(entry.get("text") or ""))
     ]
+    # 群主会话的记忆混着所有群友的发言；渲染时必须按归属标注主语，
+    # 否则“用户生日是X”会把群友A的事安到当前说话的群友B头上。
+    is_group_main = _is_group_main_conversation(str(profile.get("conversation_id") or ""))
+
+    if is_group_main:
+        known = [_group_memory_line(entry) for entry in l1[-6:]]
+        recent = [_group_memory_line(entry) for entry in l2[:4]]
+        tentative = [_group_memory_line(entry, tentative=True) for entry in candidates[-3:]]
+        short_term = [_group_l3_line(entry) for entry in l3 if str(entry.get("text") or "").strip()]
+        lines = [
+            "以下是这个群里各位群友平日聊过的事。每条都标了主语是谁，提到时主语就是那位群友，"
+            "绝对不能把某位群友说过、做过的事安到当前正在说话的群友头上，也不要当成自己（亚托莉）的经历。",
+            "聊天优先接住当前说话群友的消息；只有话题相关时才自然带出对应群友的旧事，无关就完全不提。",
+            "记忆细节模糊拿不准时，先流露心虚局促，接着认真努力回想，最后无奈坦言记不清。",
+        ]
+        if profile.get("group_activity_state"):
+            lines.append("当前群聊气氛：" + str(profile["group_activity_state"]))
+        if l1:
+            lines.append("群里了解到的事：" + "；".join(known))
+        if l2:
+            lines.append("群友最近相关的事：" + "；".join(recent))
+        if candidates:
+            lines.append("某位群友可能的事：" + "；".join(tentative))
+        if l3:
+            lines.append("群里刚才聊到：" + "；".join(short_term))
+        lines.append("群聊里主动了解群友要克制，不连环盘问某一个人。")
+        return "\n".join(lines)
 
     known = [_natural_memory_line(entry) for entry in l1[-6:]]
     recent = [_natural_memory_line(entry) for entry in l2[:4]]
@@ -218,7 +245,9 @@ def _format_recall_context(profile: dict[str, Any], user_text: str) -> str:
     ]
     if profile.get("affection_state"):
         lines.append("你现在对用户的自然感觉：" + str(profile["affection_state"]))
-    if profile.get("group_activity_state") and user_text and _is_group_conversation(str(profile.get("conversation_id", ""))):
+    if profile.get("group_activity_state") and _is_group_conversation(
+        str(profile.get("conversation_id") or "")
+    ):
         lines.append("当前群聊气氛：" + str(profile["group_activity_state"]))
     if l1:
         lines.append("你知道的用户信息：" + "；".join(known))
@@ -236,6 +265,25 @@ def _format_recall_context(profile: dict[str, Any], user_text: str) -> str:
     lines.append("遇到用户爱好里的细分内容不懂时，可以自然请教一句，但先回应当前消息。")
     return "\n".join(lines)
 
+def _group_l3_line(entry: dict[str, Any]) -> str:
+    text = str(entry.get("text") or "").strip()
+    actor = str(entry.get("actor_name") or "").strip()
+    if actor:
+        return f"群友“{actor}”说过：{text}"
+    return f"有位群友说过：{text}"
+
+def _is_group_main_conversation(conversation_id: str) -> bool:
+    return str(conversation_id or "").startswith("group:") and ":user:" not in str(
+        conversation_id or ""
+    )
+
+def _actor_prefix(entry: dict[str, Any]) -> str:
+    actor = str(entry.get("actor_name") or "").strip()
+    if actor:
+        return f"群友“{actor}”"
+    # 无归属的旧条目也要显式说明主语不是当前说话者，避免渲染成“用户”。
+    return "有位群友"
+
 def _natural_memory_line(entry: dict[str, Any], tentative: bool = False) -> str:
     key = str(entry.get("key") or entry.get("category") or "记忆")
     value = str(entry.get("value") or "")
@@ -243,6 +291,38 @@ def _natural_memory_line(entry: dict[str, Any], tentative: bool = False) -> str:
     if tentative:
         return f"用户可能{_natural_predicate(key, value)}"
     return f"用户{_natural_predicate(key, value)}"
+
+def _group_memory_line(entry: dict[str, Any], tentative: bool = False) -> str:
+    key = str(entry.get("key") or entry.get("category") or "记忆")
+    value = str(entry.get("value") or "")
+    key = key.split(":", 1)[0]
+    prefix = _actor_prefix(entry)
+    if tentative:
+        return f"{prefix}可能是{_group_predicate(key, value)}"
+    return f"{prefix}{_group_predicate(key, value)}"
+
+def _group_predicate(key: str, value: str) -> str:
+    if not value:
+        return "聊起过一段相关背景"
+    if "生日" in key:
+        return f"提到生日是{value}"
+    if "称呼" in key:
+        return f"希望被叫作{value}"
+    if "喜欢的食物" in key:
+        return f"提到喜欢吃或喝{value}"
+    if "兴趣" in key or "偏好" in key:
+        return f"聊到过喜欢{value}"
+    if "讨厌" in key:
+        return f"表示过不喜欢{value}"
+    if "习惯" in key or "habit" in key:
+        return f"平时习惯{value}"
+    if "身份" in key or "专业" in key:
+        return f"提到过自己是{value}"
+    if "回复方式" in key or "communication" in key:
+        return f"希望你回复时{value}"
+    if "event" in key or "事件" in key:
+        return f"提到：{value}"
+    return f"聊起过{value}"
 
 def _natural_predicate(key: str, value: str) -> str:
     if not value:
@@ -291,6 +371,7 @@ def _remember_important_interaction(
     text: str,
     now: float,
     affection_event: dict[str, Any] | None,
+    actor_name: str | None = None,
 ) -> str | None:
     # L2 是事件层，不是情绪流水账。普通感谢、吐槽和一次性情绪
     # 只参与好感度计算；只有明确的重大互动才保留为长期事件。
@@ -318,6 +399,10 @@ def _remember_important_interaction(
         "state": "active",
         "associations": [],
     }
+    if actor_name:
+        # 群主会话的重大互动（表白/求助等）必须记是谁发起的，
+        # 否则注入时会被当成当前说话者的经历。
+        event["actor_name"] = str(actor_name)
     _attach_affection_metadata(event, affection_event, current_affection)
     return _upsert_l2(memory, event, now)
 

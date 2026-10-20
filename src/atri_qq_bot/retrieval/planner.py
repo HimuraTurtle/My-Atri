@@ -131,7 +131,13 @@ class ContextRetrievalPlanner:
                         "content": value,
                         "importance": max(0.0, min(1.0, float(item.get("confidence") or importance))),
                         "updated_at": item.get("updated_at") or item.get("created_at") or time.time(),
-                        "metadata": {"category": item.get("category"), "state": item.get("state")},
+                        "metadata": {
+                            "category": item.get("category"),
+                            "state": item.get("state"),
+                            # 群主会话 scope 的条目来自不同群友；不带归属就
+                            # 渲染不出"这是谁的事"，会被安到当前说话者头上。
+                            "actor_name": item.get("actor_name"),
+                        },
                     }
                 )
         self.repository.replace_scope_source(scope, "user_profile", entries)
@@ -160,15 +166,24 @@ class ContextRetrievalPlanner:
         memories: list[RetrievedEntry],
         lore: list[RetrievedEntry],
     ) -> str:
-        lines = [
-            "相处细节：先接住当前话题；只在确实相关时自然带出，不要说自己在读取记忆，也不要说调用或记录记忆。",
-            "记不准就坦白，不要补造细节。口癖只在情绪和话题自然匹配时偶尔使用，避免复用最近几轮的开头、句式或同一句傲娇话。",
-        ]
+        scope = str(profile.get("conversation_id") or "")
+        is_group_main = scope.startswith("group:") and ":user:" not in scope
+        if is_group_main:
+            lines = [
+                "以下是群里各位群友相关的事。每条的主语是具体某位群友；"
+                "提到时主语就是那位群友，不能安到当前正在说话的群友头上，也不要当成自己（亚托莉）的经历。",
+                "先接住当前说话群友的话题；只在确实相关时自然带出，无关就完全不提。记不准就坦白，不要补造细节。",
+            ]
+        else:
+            lines = [
+                "相处细节：先接住当前话题；只在确实相关时自然带出，不要说自己在读取记忆，也不要说调用或记录记忆。",
+                "记不准就坦白，不要补造细节。口癖只在情绪和话题自然匹配时偶尔使用，避免复用最近几轮的开头、句式或同一句傲娇话。",
+            ]
         affection = str(profile.get("affection_state") or "").strip()
-        if affection:
+        if affection and not is_group_main:
             # 沿用旧上下文的自然表述，避免下游人格提示和既有测试语义变化。
             lines.append("你现在对用户的自然感觉：" + affection)
-        if str(profile.get("conversation_id") or "").startswith("group:"):
+        if scope.startswith("group:"):
             activity = str(profile.get("group_activity_state") or "").strip()
             if activity:
                 lines.append("群聊气氛：" + activity)
@@ -176,12 +191,15 @@ class ContextRetrievalPlanner:
         used = 0
         memory_lines: list[str] = []
         for entry in memories:
-            line = _memory_line(entry)
+            line = _memory_line(entry, group_main=is_group_main)
             if line and len(line) + used <= self.settings.max_context_chars * 0.56:
                 memory_lines.append(line)
                 used += len(line)
         if memory_lines:
-            lines.append("你知道的用户信息（与当前话题相关）：" + "；".join(memory_lines))
+            if is_group_main:
+                lines.append("群里了解到的事（与当前话题相关）：" + "；".join(memory_lines))
+            else:
+                lines.append("你知道的用户信息（与当前话题相关）：" + "；".join(memory_lines))
 
         lore_lines: list[str] = []
         for entry in lore:
@@ -247,12 +265,18 @@ def _looks_like_lore_question(text: str) -> bool:
     return any(needle in value for needle in needles)
 
 
-def _memory_line(entry: RetrievedEntry) -> str:
+def _memory_line(entry: RetrievedEntry, group_main: bool = False) -> str:
     if not entry.content:
         return ""
+    if not group_main:
+        if entry.layer == "candidates":
+            return f"可能：{entry.title}—{entry.content}"
+        return f"{entry.title}—{entry.content}"
+    actor = str((entry.metadata or {}).get("actor_name") or "").strip()
+    subject = f"群友“{actor}”" if actor else "某位群友"
     if entry.layer == "candidates":
-        return f"可能：{entry.title}—{entry.content}"
-    return f"{entry.title}—{entry.content}"
+        return f"{subject}可能：{entry.title}—{entry.content}"
+    return f"{subject}：{entry.title}—{entry.content}"
 
 
 def _truncate(value: str, limit: int) -> str:

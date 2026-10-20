@@ -72,7 +72,11 @@ class MemoryObservationMixin(MemoryMixin):
         _merge_feature_counts(item, _message_features(text))
         _append_history(item, "user", text, now, actor_id=actor_id, nickname=nickname)
         item["topic_words"] = _merge_topics(item.get("topic_words"), _extract_topics(text))
-        _append_session_l3(self._session_l3, conversation_id, text, now, memory)
+        # 只有群主会话的消息才需要归属标记：那里混着所有群友的发言，
+        # 而成员子会话/私聊的条目本来就属于同一个人。
+        is_group_main = _is_group_conversation(conversation_id) and ":user:" not in conversation_id
+        actor_name = str(nickname).strip() if is_group_main and nickname else None
+        _append_session_l3(self._session_l3, conversation_id, text, now, memory, actor_name=actor_name)
         affection_event = _classify_affection_event(text)
         if update_affection:
             _update_affection(item, affection_event, is_owner, now=now)
@@ -83,6 +87,7 @@ class MemoryObservationMixin(MemoryMixin):
             affection_event,
             visibility=visibility,
             source_context=source_context,
+            actor_name=actor_name,
         )
         self._enqueue_memory_extraction(
             conversation_id,
@@ -365,6 +370,63 @@ class MemoryObservationMixin(MemoryMixin):
         if not isinstance(history, list):
             return []
         return [entry for entry in history[-max(0, limit) :] if isinstance(entry, dict)]
+
+    def record_completed_action(
+        self,
+        conversation_id: str,
+        summary: str,
+        *,
+        action: str = "",
+        now: float | None = None,
+    ) -> None:
+        """工具/命令成功完成时记一条「已完成的动作」。
+
+        回复模型接到的历史只是普通文本，无法分辨"刚才查过什么"；没有
+        这份账本，模型会把已完成的查询说成待办。跨轮次持久（随会话
+        item 落盘），只保留最近 12 条防止快照膨胀。
+        """
+        summary = str(summary or "").strip()
+        if not summary:
+            return
+        now = now or time.time()
+        item = self._conversation(conversation_id)
+        actions = list(item.get("completed_actions") or [])
+        actions.append({"text": summary[:120], "action": str(action or "")[:32], "at": now})
+        item["completed_actions"] = actions[-12:]
+        self._save()
+
+    def recent_completed_actions(
+        self,
+        conversation_id: str,
+        *,
+        limit: int = 6,
+        within_minutes: float = 30.0,
+        now: float | None = None,
+    ) -> list[dict[str, Any]]:
+        """最近真实完成的动作（新→旧）。超时视窗外的不再注入上下文。"""
+        now = now or time.time()
+        item = self._conversation(conversation_id, save=False)
+        actions = item.get("completed_actions")
+        if not isinstance(actions, list):
+            return []
+        cutoff = now - max(1.0, float(within_minutes)) * 60.0
+        entries: list[dict[str, Any]] = []
+        for entry in reversed(actions):
+            if not isinstance(entry, dict):
+                continue
+            at = _as_float(entry.get("at"))
+            if at is None or at < cutoff:
+                break
+            entries.append(
+                {
+                    "text": str(entry.get("text") or ""),
+                    "action": str(entry.get("action") or ""),
+                    "at": at,
+                }
+            )
+            if len(entries) >= max(1, int(limit)):
+                break
+        return entries
 
     def profile(self, conversation_id: str, now: float | None = None) -> dict[str, Any]:
         now = now or time.time()
