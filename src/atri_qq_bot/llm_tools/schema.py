@@ -40,6 +40,8 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
         tools.extend(_minimax_draw_tool_schemas())
     if bool(getattr(config, "isittrue_enabled", False)):
         tools.append(_fact_check_schema())
+    if bool(getattr(config, "papers_enabled", True)):
+        tools.append(_paper_search_schema())
     if bool(getattr(config, "web_search_enabled", True)):
         tools.append(_weather_schema())
         tools.append(_web_search_schema(config))
@@ -469,6 +471,53 @@ def _fact_check_schema() -> dict[str, Any]:
                     },
                 },
                 "required": ["claim"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _paper_search_schema() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "search_papers",
+            "description": (
+                "检索学术论文与文献（OpenAlex 全学科文献库，含期刊论文和预印本）。"
+                "用户想找某个主题的论文、文献、参考文献，问某方向的研究进展或经典论文，"
+                "或正在写论文/做研究需要查资料时使用。"
+                "query 传核心学术关键词（中英文均可），不要口语化；"
+                "结果返回标题、作者、年份、期刊、被引数、url（DOI 或 OpenAlex 网址）"
+                "与摘要，均为真实元数据。整理回复时每篇文献必须附上其 url。"
+                "普通资讯、新闻仍用 search_web。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": (
+                            "检索关键词，中文或英文学术用语均可，"
+                            "例如「图神经网络 综述」「knowledge graph embedding survey」。"
+                        ),
+                    },
+                    "limit": {
+                        "type": "integer",
+                        "description": "返回论文数量，默认 5，最多 8。",
+                        "minimum": 1,
+                        "maximum": 8,
+                    },
+                    "sort": {
+                        "type": "string",
+                        "description": (
+                            "排序方式：relevance=按相关度（默认）；"
+                            "cited=按被引量降序（找经典/高影响力文献时用）；"
+                            "newest=按发表时间降序（找最新进展时用）。"
+                        ),
+                        "enum": ["relevance", "newest", "cited"],
+                    },
+                },
+                "required": ["query"],
                 "additionalProperties": False,
             },
         },
