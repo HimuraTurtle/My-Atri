@@ -190,7 +190,7 @@ async def test_chat(config: BotConfig, text: str) -> dict[str, Any]:
         replace(config, idle_proactive_enabled=False, group_proactive_enabled=False)
     )
     try:
-        reply = await engine._reply_with_guarded_api("webui:test", text, "主人")
+        reply = await engine._reply_with_guarded_api("webui:test", text, "")
         reply = engine._finalize_reply(
             "webui:test",
             text,
@@ -264,7 +264,7 @@ async def generate_qzone_text(config: BotConfig, prompt: str, kind: str, profile
     reply = await engine._reply_with_guarded_api(
         "webui:qzone:generate",
         instruction,
-        "主人",
+        "",
         extra_system=system,
     )
     reply = engine._finalize_reply("webui:qzone:generate", instruction, reply, strict_quality=False).strip()

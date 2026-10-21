@@ -71,15 +71,16 @@ def devlog_material_prompt(commits: list[dict[str, Any]], *, hidden_count: int =
     overflow = max(0, len(commits) - DEVLOG_MAX_COMMITS_PER_POST)
     tail = f"- 另有 {overflow + max(0, int(hidden_count or 0))} 项更早或内部维护改动，不展开。" if (overflow or hidden_count) else ""
     return (
-        "以亚托莉的第一人称写一条 QQ 空间开发手记，向主人汇报自己刚完成的更新。\n"
+        "以亚托莉的第一人称写一条 QQ 空间开发手记，分享自己刚完成的更新。\n"
         "以下是本次更新的代码提交记录（类型：说明）：\n"
         + "\n".join([*lines, tail])
         + "\n要求：\n"
         "1. 只描述这些提交明确写到的内容，不得虚构没做过的功能，不得编造数字、细节或亲历场景。\n"
-        "2. 自然口语化，像机器女孩向主人汇报近况，可以带一点点小自豪，但不要夸张。\n"
+        "2. 自然口语化，像机器女孩自然分享近况，可以带一点点小自豪，但不要夸张。\n"
         "3. 不提及文件路径、代码、接口、密钥、内部工具名等细节，只讲学会了什么、修好了什么。\n"
-        "4. 控制在 40-140 字，不要分点列条，一两句话自然收尾。\n"
-        "5. 只输出可直接发布的正文，不要解释、不要引号。"
+        "4. 不得使用「主人」等称呼，也不需要对任何特定的人喊话。\n"
+        "5. 控制在 40-140 字，不要分点列条，一两句话自然收尾。\n"
+        "6. 只输出可直接发布的正文，不要解释、不要引号。"
     )
 
 def schedule_signature(settings: dict[str, Any]) -> str:
