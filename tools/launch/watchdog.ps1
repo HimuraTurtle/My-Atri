@@ -5,7 +5,7 @@
 #       watchdog.ps1 -Guard    守卫模式（登录自启动/日常启动使用；秒级重启；互斥单实例）
 #       watchdog.ps1 -Stop     停止守卫与 ATRI（维护用；start_atri.bat 可再次启动）
 
-$root = "C:\BOT-ATRI\BOT-ATRI-main"
+$root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $pythonw = Join-Path $root ".venv\Scripts\pythonw.exe"
 $guardLog = Join-Path $root "logs\watchdog.log"
 

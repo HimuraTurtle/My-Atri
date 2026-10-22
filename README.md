@@ -24,7 +24,7 @@
 - `data/` — 表情包素材、触发词与运行数据（密钥不入库）
 - `logs/` — 运行日志（git 不跟踪）
 
-根目录的中文 `.bat` 与 `新手启动说明.txt` 是给使用者的双击入口，实际逻辑都在 `tools/` 内：`安装/卸载桌宠亚托莉.bat` 调 `tools/desktop_pet/` 的安装脚本，`停止亚托莉.bat` 调 `tools/launch/qq_legacy/stop-all.bat`，`检查亚托莉状态.bat` 调 `tools/check-status.ps1`。
+根目录的中文 `.bat` 是给使用者的双击入口，实际逻辑都在 `tools/` 内：`安装亚托莉.bat` 运行 `tools/install/install.ps1` 五阶段安装向导，`停止亚托莉.bat` 调 `tools/launch/watchdog.ps1` 停止核心与守卫，`检查亚托莉状态.bat` 调 `tools/check-status.ps1` 做只读运行状态检查。
 
 开发者调试、服务关系与本机端口见 [DEVELOPER.md](DEVELOPER.md)。
 
@@ -232,6 +232,20 @@ NapCat 的 OneBot 反向 WebSocket 已经自动配置为：`ws://127.0.0.1:8765/
 - **开源安全**：`.env.example` 使用占位符，`.gitignore` 排除密钥、聊天历史、SQLite、模型、缓存、音乐素材和 IDE 配置。
 
 ## 安装
+
+### 方式一：一键安装（推荐）
+
+双击项目根目录的 `安装亚托莉.bat`，向导依次完成：
+
+1. 环境预检：Python 3.11+（或 uv）、磁盘空间、QQ 客户端检测
+2. Python 环境：虚拟环境 + 依赖安装（可选清华镜像）、`.env` 生成、交互填写 `BOT_QQ`
+3. 协议端：NapCat 检测与下载引导，`NAPCAT_DIR` 自动写入 `.env`
+4. 启动验证：拉起 ATRI + QQ 扫码登录，自动轮询 8765 连接
+5. 可选组件：桌宠快捷方式、开机自启、Ollama 与 DeepSeek key 说明
+
+各阶段幂等，中断后重跑会自动跳过已完成步骤；安装日志见 `tools/install/install.log`。
+
+### 方式二：手动安装
 
 ```powershell
 cd "C:\Path\To\AI_ATRI"  # 替换为你的实际路径
