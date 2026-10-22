@@ -226,6 +226,12 @@ class BotConfig:
     # 用户找论文/文献/研究进展时由聊天模型自主调用。
     papers_enabled: bool = True
     papers_timeout_seconds: float = 30.0
+    # 舞萌 DX 查分器：search_maimai_best50 工具，落雪开发者模式按 QQ 直查。
+    # 管理员需在 maimai.lxns.net 申请开发者 Token；玩家需绑定 QQ 并开放
+    # 第三方读取。未配置 Token 时工具不注册。
+    maimai_enabled: bool = True
+    maimai_lxns_dev_token: str = ""
+    maimai_timeout_seconds: float = 20.0
     # 热梗自动学习：定时抓取热搜并用聊天模型精选，聊天时注入最新梗。
     meme_learning_enabled: bool = True
     meme_learning_interval_hours: int = 6

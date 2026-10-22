@@ -24,6 +24,9 @@ def _tool_action_summary(name: str, arguments: dict[str, Any]) -> str:
         return f"检索了记忆「{query[:40]}」" if query else "检索了记忆"
     if name == "search_papers":
         return f"检索了论文「{query[:40]}」" if query else "检索了论文"
+    if name == "search_maimai_best50":
+        mode = str(arguments.get("mode") or "").strip().lower()
+        return "查了舞萌AP50成绩" if mode == "ap50" else "查了舞萌B50成绩"
     if name == "bilibili_read":
         video = str(arguments.get("video") or "").strip()
         return f"解析了B站视频 {video[:40]}" if video else "解析了B站视频"
@@ -579,6 +582,10 @@ class EngineToolsMixin(PersonaEngineMixin):
             return await self._execute_fact_check_tool(arguments, config)
         if name == "search_papers":
             return await self._execute_paper_search_tool(arguments, config)
+        if name == "search_maimai_best50":
+            return await self._execute_maimai_best50_tool(
+                conversation_id, arguments, config
+            )
         return None
 
     async def _execute_fact_check_tool(
@@ -637,6 +644,47 @@ class EngineToolsMixin(PersonaEngineMixin):
             data = await service.search(query, limit=limit, sort=sort)
         except Exception as exc:
             return f"论文检索执行失败：{exc}。不要编造论文，坦诚说明没查到。"
+        return _json.dumps(data, ensure_ascii=False)
+
+    async def _execute_maimai_best50_tool(
+        self,
+        conversation_id: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import asyncio
+        import json as _json
+
+        from ..maimai import get_maimai_service
+
+        service = get_maimai_service(config)
+        if service is None:
+            return "舞萌查分器未启用或未配置落雪开发者 Token，请直接用文字自然回复。"
+        qq = arguments.get("qq")
+        if qq in (None, "", 0) and conversation_id.startswith("private:"):
+            try:
+                qq = int(conversation_id.split(":", 1)[1])
+            except (TypeError, ValueError):
+                qq = None
+        if qq in (None, "", 0):
+            return (
+                "qq 为空且当前不在私聊，无法确定要查询的玩家。"
+                "请向用户询问 QQ 号后重新调用。"
+            )
+        mode = str(arguments.get("mode") or "b50").strip().lower()
+        if mode not in {"b50", "ap50"}:
+            mode = "b50"
+        timeout = max(
+            10.0, float(getattr(config, "maimai_timeout_seconds", 20.0) or 20.0)
+        )
+        try:
+            data = await asyncio.wait_for(
+                service.best50_by_qq(qq, mode=mode), timeout=timeout
+            )
+        except asyncio.TimeoutError:
+            return "舞萌查分超时。不要编造成绩，可建议用户稍后再试。"
+        except Exception as exc:
+            return f"舞萌查分执行失败：{exc}。不要编造成绩。"
         return _json.dumps(data, ensure_ascii=False)
 
     async def _execute_minimax_draw_tool(
