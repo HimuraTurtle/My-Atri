@@ -336,11 +336,6 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         papers_timeout_seconds=max(
             10.0, min(60.0, _env_float("PAPERS_TIMEOUT_SECONDS", 30.0))
         ),
-        maimai_enabled=_env_bool("MAIMAI_ENABLED", True),
-        maimai_lxns_dev_token=_env("MAIMAI_LXNS_DEV_TOKEN", "").strip(),
-        maimai_timeout_seconds=max(
-            10.0, min(60.0, _env_float("MAIMAI_TIMEOUT_SECONDS", 20.0))
-        ),
         meme_learning_enabled=_env_bool("MEME_LEARNING_ENABLED", True),
         meme_learning_interval_hours=max(
             1, _env_int("MEME_LEARNING_INTERVAL_HOURS", 6)
