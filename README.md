@@ -7,6 +7,27 @@
 
 ---
 
+## 仓库结构
+
+- `src/atri_qq_bot/` — 机器人主服务：OneBot 接入、人格与记忆、认知内核、工具箱与各能力模块
+- `src/atri_webui/` — 本机管理面板（WebUI）与 HTTP API
+- `src/atri_desktop/` — Windows 桌宠（托盘图标与启动菜单）
+- `plugins/qqzone/` — QQ 空间动态插件
+- `tests/` — 全量回归测试（47 个测试文件）
+- `docs/prompts/` — 运行时提示词，由代码 `load_prompt` 加载，改名需同步代码
+- `docs/learning/` — 项目讲解与课程材料
+- `docs/research/` — 原作考据与人设档案
+- `docs/prototypes/` — 界面原型与宣传图
+- `docs/`（根）— 架构总览、交接文档与模块专题说明（评测见 `insights.md`）
+- `tools/` — 启动链、桌宠、语音管线、记忆索引维护与环境检查脚本
+- `deploy/` — 云端部署说明与 NapCat OneBot v11 配置样例
+- `data/` — 表情包素材、触发词与运行数据（密钥不入库）
+- `logs/` — 运行日志（git 不跟踪）
+
+根目录的中文 `.bat` 与 `新手启动说明.txt` 是给使用者的双击入口，实际逻辑都在 `tools/` 内：`安装/卸载桌宠亚托莉.bat` 调 `tools/desktop_pet/` 的安装脚本，`停止亚托莉.bat` 调 `tools/launch/qq_legacy/stop-all.bat`，`检查亚托莉状态.bat` 调 `tools/check-status.ps1`。
+
+开发者调试、服务关系与本机端口见 [DEVELOPER.md](DEVELOPER.md)。
+
 ## 版本与发布状态
 
 | 分支 | 版本 | 状态与定位 |
@@ -143,7 +164,7 @@ ConversationTurn
 - **v0.4**：更新 `.env.example`、`.gitignore` 和 `uv.lock`，加入 LangGraph、SQLite checkpoint 及 Insights 可选依赖。
 - **优化结果**：公开仓库只保留可复现的源码、文档和示例配置。
 
-详细的评测、群聊总结和隐私配置见 [`docs/insights.md`](docs/insights.md)；语音运行时见 [`docs/voice.md`](docs/voice.md)。
+详细的评测、群聊总结和隐私配置见 [`docs/insights.md`](docs/insights.md)。
 
 ---
 
