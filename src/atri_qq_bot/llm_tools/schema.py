@@ -42,10 +42,6 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
         tools.append(_fact_check_schema())
     if bool(getattr(config, "papers_enabled", True)):
         tools.append(_paper_search_schema())
-    if bool(getattr(config, "maimai_enabled", True)) and str(
-        getattr(config, "maimai_lxns_dev_token", "") or ""
-    ).strip():
-        tools.append(_maimai_best50_schema())
     if bool(getattr(config, "web_search_enabled", True)):
         tools.append(_weather_schema())
         tools.append(_web_search_schema(config))
@@ -522,43 +518,6 @@ def _paper_search_schema() -> dict[str, Any]:
                     },
                 },
                 "required": ["query"],
-                "additionalProperties": False,
-            },
-        },
-    }
-
-
-def _maimai_best50_schema() -> dict[str, Any]:
-    return {
-        "type": "function",
-        "function": {
-            "name": "search_maimai_best50",
-            "description": (
-                "查询舞萌DX（maimai DX）玩家的 B50 / AP50 成绩概览，数据来自落雪查分器。"
-                "用户想看自己或某人的舞萌 rating、B50 总分、最佳成绩，或提到 "
-                "b50/ap50/rating/舞萌查分/舞萌成绩时使用。"
-                "qq 传要查的玩家 QQ 号（需已在落雪查分器绑定）；私聊里用户查自己"
-                "且没给 QQ 号时可以不传，系统会自动使用当前私聊用户的 QQ。"
-                "返回玩家名、DX rating、旧谱/新谱 Best 总分与前十成绩摘要；"
-                "用自己的话自然转述重点（rating、总分、突出的成绩），不要逐条罗列全部数据。"
-                "结果 note 里有转述注意事项，必须遵守。"
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "qq": {
-                        "type": "integer",
-                        "description": (
-                            "要查询的玩家 QQ 号；省略时默认当前私聊用户。"
-                            "群里查别人或用户报了 QQ 号时必须传。"
-                        ),
-                    },
-                    "mode": {
-                        "type": "string",
-                        "enum": ["b50", "ap50"],
-                        "description": "b50=Best 50（默认）；ap50=All Perfect 50。",
-                    },
-                },
                 "additionalProperties": False,
             },
         },
