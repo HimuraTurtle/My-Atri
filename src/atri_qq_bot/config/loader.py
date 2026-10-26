@@ -353,7 +353,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         ),
         qzone_auto_comment_max=max(1, min(5, _env_int("QZONE_AUTO_COMMENT_MAX", 2))),
         qzone_random_comment_probability=max(
-            0.0, min(1.0, _env_float("QZONE_RANDOM_COMMENT_PROBABILITY", 0.001))
+            0.0, min(1.0, _env_float("QZONE_RANDOM_COMMENT_PROBABILITY", 0.0005))
         ),
         qzone_random_comment_cooldown_minutes=max(
             1, min(1440, _env_int("QZONE_RANDOM_COMMENT_COOLDOWN_MINUTES", 30))

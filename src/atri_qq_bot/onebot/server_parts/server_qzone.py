@@ -252,7 +252,7 @@ class OneBotQzoneMixin(OneBotServerMixin):
         if not bool(getattr(self.config, "qzone_auto_comment_enabled", True)):
             return
         probability = float(
-            getattr(self.config, "qzone_random_comment_probability", 0.001)
+            getattr(self.config, "qzone_random_comment_probability", 0.0005)
         )
         if probability <= 0 or random.random() >= probability:
             return

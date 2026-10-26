@@ -326,7 +326,7 @@ class QzoneService:
                 "auto_comment_time": str(getattr(self._config, "qzone_auto_comment_time", "23:30")),
                 "auto_comment_next_run": float(settings.get("auto_comment_next_run") or 0),
                 "random_probability": float(
-                    getattr(self._config, "qzone_random_comment_probability", 0.001)
+                    getattr(self._config, "qzone_random_comment_probability", 0.0005)
                 ),
                 "visibility": int(getattr(self._config, "qzone_visibility", 1)),
                 "post_topics": settings.get("post_topics") or [],
