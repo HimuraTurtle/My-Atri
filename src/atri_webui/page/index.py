@@ -18,7 +18,6 @@ from .script_status import PART as SCRIPT_STATUS
 from .script_models import PART as SCRIPT_MODELS
 from .script_proactive import PART as SCRIPT_PROACTIVE
 from .script_directory import PART as SCRIPT_DIRECTORY
-from .script_qzone import PART as SCRIPT_QZONE
 from .script_memory import PART as SCRIPT_MEMORY
 from .script_voice_test import PART as SCRIPT_VOICE_TEST
 
@@ -44,7 +43,6 @@ def render_index() -> str:
             SCRIPT_MODELS,
             SCRIPT_PROACTIVE,
             SCRIPT_DIRECTORY,
-            SCRIPT_QZONE,
             SCRIPT_MEMORY,
             SCRIPT_VOICE_TEST
         )

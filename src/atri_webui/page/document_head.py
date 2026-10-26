@@ -184,10 +184,8 @@ PART = r"""<!doctype html>
     .user-directory-context { margin-top:12px; padding:13px; border:1px solid rgba(100,116,139,.18); border-radius:12px; background:rgba(241,245,249,.68); }
     .user-directory-context h4 { margin:0; }
     .user-directory-context.memory-context { border-color:rgba(167,139,250,.32); background:linear-gradient(135deg,rgba(237,233,254,.58),rgba(255,255,255,.72)); }
-    .user-directory-context.qzone-context { border-color:rgba(125,211,252,.34); background:linear-gradient(135deg,rgba(224,242,254,.62),rgba(255,255,255,.72)); }
     .user-directory-context.proactive-context { border-color:rgba(129,140,248,.36); background:linear-gradient(135deg,rgba(224,231,255,.72),rgba(240,249,255,.78)); }
     .user-directory-context.summary-context { border-color:rgba(52,211,153,.34); background:linear-gradient(135deg,rgba(209,250,229,.58),rgba(255,255,255,.72)); }
-    .user-directory-context .qzone-comment { min-height:74px; }
     .user-directory-context .summary-plan-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
     .user-directory-context .summary-plan { background:rgba(255,255,255,.62); }
     .user-directory-row.bot-row + .user-directory-inline-detail { border-color:rgba(125,211,252,.45); }
@@ -202,14 +200,10 @@ PART = r"""<!doctype html>
     .user-directory-inline-memory .card-context-values > span:nth-child(4) { color:#075985; background:rgba(224,242,254,.85); border-color:rgba(56,189,248,.3); }
     .user-directory-inline-memory .card-context-summary { display:block; margin-top:9px; padding-top:8px; border-top:1px dashed rgba(99,102,241,.2); line-height:1.75; white-space:pre-wrap; overflow-wrap:anywhere; }
     .user-directory-inline-memory .memory-meta { display:block; margin-top:8px; }
-    .qzone-auto-switches { display:flex; flex-wrap:wrap; gap:10px; align-items:center; margin:10px 0; padding:9px 11px; border:1px solid rgba(56,189,248,.22); border-radius:10px; background:rgba(224,242,254,.46); }
-    .qzone-auto-switches label { display:flex; align-items:center; gap:7px; color:#075985; font-size:12px; }
-    .qzone-auto-switches input { width:17px; height:17px; }
     .atri-pool { display:grid; gap:7px; margin-top:10px; }
     .atri-pool-item { padding:9px 10px; border:1px solid rgba(99,102,241,.18); border-radius:11px; background:rgba(255,255,255,.62); }
     .atri-pool-item .pool-head { display:flex; justify-content:space-between; gap:8px; align-items:center; }
     .atri-pool-item .pool-content { margin-top:4px; white-space:pre-wrap; overflow-wrap:anywhere; line-height:1.5; }
-    .user-directory-full-qzone { margin-top:10px; display:grid; gap:8px; }
     .atri-directory-publisher { border-color:rgba(125,211,252,.34); background:linear-gradient(135deg,rgba(125,211,252,.14),rgba(167,139,250,.12)); }
     .user-directory-integrated-toolbar { display:flex; flex-wrap:wrap; align-items:center; gap:10px; margin:12px 0 4px; padding:11px 13px; border:1px solid rgba(125,211,252,.24); border-radius:12px; background:rgba(125,211,252,.08); }
     .user-directory-integrated-toolbar .note:last-child { flex:1 1 280px; }
@@ -365,54 +359,6 @@ PART = r"""<!doctype html>
     .minecraft-maid-meta div { background:#f8fafc; border-radius:6px; padding:8px; min-width:0; }
     .minecraft-maid-meta span { display:block; color:var(--muted); font-size:11px; margin-bottom:3px; }
     .minecraft-command-grid { display:grid; grid-template-columns:repeat(4,minmax(90px,1fr)); gap:8px; margin-top:12px; }
-    .qzone-layout { display:grid; grid-template-columns:minmax(280px,.65fr) minmax(440px,1.35fr); gap:14px; align-items:start; }
-    .qzone-feed-list { display:grid; gap:12px; }
-    .qzone-feed { border:1px solid rgba(167,139,250,.2); border-radius:18px; padding:16px; background:rgba(255,255,255,.5); }
-    .qzone-feed-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
-    .qzone-feed-content { margin:12px 0; white-space:pre-wrap; overflow-wrap:anywhere; }
-    .qzone-comment { min-height:82px; }
-    .qzone-automation-head { display:flex; justify-content:space-between; gap:14px; align-items:flex-start; margin-bottom:14px; }
-    .qzone-automation-head h2 { margin:0 0 4px; }
-    .qzone-automation-grid { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); gap:14px; align-items:start; }
-    .qzone-form-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
-    .qzone-content-pool,.qzone-target-list,.qzone-log-list { display:grid; gap:9px; margin-top:12px; max-height:420px; overflow:auto; }
-    .qzone-content-item,.qzone-target-item,.qzone-log-item { border:1px solid rgba(167,139,250,.2); border-radius:15px; padding:12px; background:rgba(255,255,255,.48); }
-    .qzone-content-item,.qzone-target-item { display:grid; gap:8px; }
-    .qzone-content-head,.qzone-target-head,.qzone-log-head { display:flex; justify-content:space-between; gap:10px; align-items:flex-start; }
-    .qzone-content-text { white-space:pre-wrap; overflow-wrap:anywhere; }
-    .qzone-log-item { font-size:12px; }
-    .qzone-log-content { margin-top:5px; white-space:pre-wrap; overflow-wrap:anywhere; color:var(--muted); }
-    .qzone-target-item label { display:flex; align-items:center; gap:8px; }
-    .qzone-target-item input[type=checkbox] { width:18px; height:18px; }
-    .qzone-stat-line { display:flex; flex-wrap:wrap; gap:8px; margin-top:10px; }
-    .qzone-stat-line .badge { min-width:92px; justify-content:center; }
-    .qzone-feed-browser { margin-bottom:14px; }
-    .qzone-feed-toolbar { display:grid; grid-template-columns:minmax(180px,1.5fr) minmax(220px,2fr) 90px auto; gap:10px; align-items:center; margin:10px 0; }
-    .qzone-feed-toolbar + .qzone-feed-toolbar { grid-template-columns:minmax(180px,1fr) auto auto; }
-    .qzone-feed-actions { display:flex; flex-wrap:wrap; gap:8px; margin-top:12px; }
-    .qzone-feed-actions button { min-height:36px; padding:7px 12px; }
-    .qzone-person-row { display:grid; gap:12px; padding:18px; border:1px solid rgba(167,139,250,.2); border-radius:20px; background:rgba(255,255,255,.56); }
-    .qzone-person-row.pinned { border-color:rgba(96,165,250,.55); box-shadow:0 12px 28px rgba(96,165,250,.12); }
-    .qzone-person-head { display:flex; justify-content:space-between; gap:12px; align-items:flex-start; }
-    .qzone-person-name { display:flex; gap:8px; align-items:center; flex-wrap:wrap; }
-    .qzone-person-switches { display:flex; gap:12px; flex-wrap:wrap; }
-    .qzone-person-switches label { display:flex; align-items:center; gap:6px; font-size:12px; color:var(--muted); }
-    .qzone-person-switches input { width:17px; height:17px; }
-    .qzone-inline-detail { margin-top:4px; padding:14px 0 0; border-top:1px solid var(--line); }
-    .qzone-detail-list { display:grid; gap:10px; margin-top:12px; }
-    .qzone-detail-item { padding:13px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.42); }
-    .qzone-atri-publisher { display:grid; gap:10px; padding:14px; border-radius:16px; background:rgba(219,234,254,.38); border:1px solid rgba(96,165,250,.28); }
-    .qzone-atri-publisher .form-grid { margin-top:0; }
-    .qzone-next-post { display:grid; gap:5px; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,.5); border:1px solid rgba(96,165,250,.2); }
-    .qzone-next-post-content { white-space:pre-wrap; overflow-wrap:anywhere; color:var(--text); }
-    .qzone-manual-actions { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px; }
-    .qzone-manual-actions input,.qzone-manual-actions textarea { flex:1 1 260px; min-width:220px; min-height:38px; box-sizing:border-box; }
-    .qzone-manual-actions textarea { resize:vertical; }
-    .devlog-details { margin-top:10px; }
-    .devlog-details summary { cursor:pointer; font-weight:600; }
-    .devlog-commit-row { display:flex; gap:8px; align-items:flex-start; margin:4px 0; font-size:12px; }
-    .devlog-commit-row .badge { flex:none; }
-    .qzone-list-foot { margin:12px 2px 0; }
     audio { width:100%; min-height:42px; }
     .surface,.profile,.model-card,.profile-column,.proactive-block,.voice-result,.singing-test-block,.singing-job,.music-stage-card,.minecraft-maid,.stat,.fact,.group-info,.entry,.history-item,.thumb,.pill { transition:transform .22s ease,box-shadow .22s ease,border-color .22s ease; animation:fadeUp .55s ease both; }
     .surface:hover,.profile:hover,.model-card:hover,.profile-column:hover,.proactive-block:hover,.voice-result:hover,.singing-test-block:hover,.singing-job:hover,.music-stage-card:hover,.minecraft-maid:hover,.stat:hover,.fact:hover,.group-info:hover,.entry:hover,.history-item:hover,.thumb:hover { transform:translateY(-4px); box-shadow:0 14px 34px rgba(120,80,200,.12); }
@@ -429,12 +375,11 @@ PART = r"""<!doctype html>
       #modelProfileEditor { position:static; }
     }
     @media (max-width:980px) {
-      .global-status .status,.model-workspace,.split,.singing-test-grid,.minecraft-grid,.qzone-layout,.qzone-automation-grid,.voice-module-nav,.music-stage-grid,.music-project-toolbar,.music-stage-layout,.music-control-grid,.music-range-grid,.music-quality,.music-revision-bar,.stepper,.score-grid,.evaluation-model-grid,.delivery-grid { grid-template-columns:1fr; }
+      .global-status .status,.model-workspace,.split,.singing-test-grid,.minecraft-grid,.voice-module-nav,.music-stage-grid,.music-project-toolbar,.music-stage-layout,.music-control-grid,.music-range-grid,.music-quality,.music-revision-bar,.stepper,.score-grid,.evaluation-model-grid,.delivery-grid { grid-template-columns:1fr; }
       #evaluationDashboardPanel.active { display:grid; grid-template-columns:1fr; }
       #evaluationDashboardPanel > .surface,
       #evaluationDashboardPanel > .split { grid-column:1 / -1; }
       .grid,.three,.profile-columns,.stat-grid,.fact-grid,.entry-grid,.proactive-layout,.weight-grid,.voice-status,.voice-compare,.minecraft-status,.minecraft-maid-meta,.minecraft-command-grid,.user-directory-inline-memory .card-context-values { grid-template-columns:1fr; }
-      .qzone-form-grid,.qzone-feed-toolbar { grid-template-columns:1fr; }
       .form-grid > label { grid-template-columns:1fr; gap:6px; }
       button { min-height:44px; }
       .proactive-block .grid { grid-template-columns:1fr; }

@@ -226,6 +226,31 @@ class BotConfig:
     # 用户找论文/文献/研究进展时由聊天模型自主调用。
     papers_enabled: bool = True
     papers_timeout_seconds: float = 30.0
+    # QQ 空间（移植自 astrbot_plugin_qzone，会话复用版）：不再独立登录，
+    # Cookie 通过 OneBot get_cookies 从 NapCat 按需借取，无独立保活。
+    qzone_enabled: bool = False
+    # qzone_* 自然语言工具（看动态/点赞/评论，点赞评论仅主人私聊可用）。
+    qzone_ai_tools_enabled: bool = True
+    qzone_timeout_seconds: float = 20.0
+    qzone_session_ttl_seconds: float = 600.0
+    # 说说默认可见性：1=公开 2=仅自己（发布与主人口令共用）。
+    qzone_visibility: int = 1
+    qzone_timezone: str = "Asia/Shanghai"
+    # 自动评论：每天一个锚点时间 ± 抖动分钟内随机执行一次。
+    qzone_auto_comment_enabled: bool = True
+    qzone_auto_comment_time: str = "23:30"
+    qzone_auto_comment_jitter_minutes: int = 10
+    # 每轮自动评论的好友动态条数上限。
+    qzone_auto_comment_max: int = 2
+    # 聊天随机触发评论：每条参与会话的消息按此概率在后台评论一条好友动态。
+    qzone_random_comment_probability: float = 0.001
+    # 两次随机触发之间的最小间隔（分钟），防连发。
+    qzone_random_comment_cooldown_minutes: int = 30
+    # 开发日志闭环：「更新日志」主人口令触发；提交白名单 + 每日上限。
+    qzone_devlog_enabled: bool = True
+    qzone_devlog_auto_publish: bool = True
+    qzone_devlog_daily_cap: int = 2
+    qzone_devlog_visibility_types: tuple[str, ...] = ("feat", "fix", "perf", "refactor")
     # 热梗自动学习：定时抓取热搜并用聊天模型精选，聊天时注入最新梗。
     meme_learning_enabled: bool = True
     meme_learning_interval_hours: int = 6

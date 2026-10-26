@@ -119,26 +119,13 @@ class HandlerConfigMixin:
         )
 
     def _handle_users(self, query: str) -> None:
-        """Return the shared user directory read model.
-
-        QQ Bridge is an optional source.  A failed friend refresh therefore
-        keeps memory/Insights/modality users visible and reports the stale
-        source state instead of failing the whole directory request.
-        """
+        """Return the shared user directory read model."""
         params = parse_qs(query)
-        friends: list[dict[str, Any]] = []
         source_status = {
             "memory": "ready",
             "insights": "unavailable",
             "modality": "ready",
-            "qzone": "not_refreshed",
         }
-        if str(params.get("sync_qzone", ["0"])[0]).lower() in {"1", "true", "yes", "on"}:
-            try:
-                friends = self._qzone_admin().friends()
-                source_status["qzone"] = "ready"
-            except Exception as exc:
-                source_status["qzone"] = f"offline: {str(exc)[:180]}"
         try:
             group_names = self._group_name_cache()
             memory_payload = self._decorate_memory_payload(
@@ -156,13 +143,10 @@ class HandlerConfigMixin:
                         group["group_name"] = group_names.get(group_id, "")
                 source_status["insights"] = "ready"
             policy = load_modality_access()
-            targets = self.webui_state.qzone_automation.store.targets()
             directory = UserDirectory(
                 memory_payload=memory_payload,
                 insights_users=insights_users,
                 modality_policy=policy,
-                qzone_targets=targets,
-                qzone_friends=friends,
                 insights_groups=insights_groups,
                 bot_qq=self.webui_state.config.bot_qq,
                 owner_qqs=self.webui_state.config.owner_qqs,

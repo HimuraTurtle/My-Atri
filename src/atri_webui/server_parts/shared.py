@@ -22,7 +22,6 @@ from atri_qq_bot.config import BotConfig
 from atri_qq_bot.persona import AtriReplyEngine
 from atri_qq_bot.runtime import PROJECT_ROOT
 
-from ..model_profiles import load_model_profiles
 from ..page import index as _page_module
 
 MAX_UPLOAD_BYTES = 8_000_000
@@ -206,67 +205,3 @@ async def test_chat(config: BotConfig, text: str) -> dict[str, Any]:
             "used_ai": False,
             "error": str(exc),
         }
-
-
-def _qzone_generation_config(config: BotConfig, profile_id: str) -> tuple[BotConfig, str]:
-    wanted = str(profile_id or "").strip()
-    if not wanted:
-        return config, "当前聊天模型"
-    profile = next((item for item in load_model_profiles() if str(item.get("id") or "") == wanted), None)
-    if not profile:
-        raise ValueError("没有找到所选模型档案")
-    if str(profile.get("model_type") or "chat") != "chat":
-        raise ValueError("QQ 动态生成只能选择聊天模型")
-    base_url = str(profile.get("base_url") or "").strip().rstrip("/")
-    model = str(profile.get("model") or "").strip()
-    if not base_url or not model:
-        raise ValueError("所选模型档案缺少接口地址或模型名")
-    try:
-        tuned = replace(
-            config,
-            openai_api_key=str(profile.get("api_key") or config.openai_api_key or ""),
-            openai_base_url=base_url,
-            openai_model=model,
-            temperature=float(profile.get("temperature") or config.temperature),
-            frequency_penalty=float(profile.get("frequency_penalty") or config.frequency_penalty),
-            max_tokens=max(120, int(profile.get("max_tokens") or config.max_tokens)),
-        )
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"模型档案参数无效：{exc}") from exc
-    return tuned, str(profile.get("name") or model)
-
-
-async def generate_qzone_text(config: BotConfig, prompt: str, kind: str, profile_id: str = "") -> dict[str, Any]:
-    instruction = str(prompt or "").strip()
-    if not instruction:
-        raise ValueError("请输入生成提示词")
-    if len(instruction) > 2000:
-        raise ValueError("提示词最多 2000 字")
-    mode = "动态" if kind == "post" else "评论"
-    if kind not in {"post", "comment"}:
-        raise ValueError("生成类型无效")
-    selected_config, profile_name = _qzone_generation_config(config, profile_id)
-    engine = AtriReplyEngine(
-        replace(
-            selected_config,
-            idle_proactive_enabled=False,
-            group_proactive_enabled=False,
-            chat_quality_retries=0,
-        )
-    )
-    system = (
-        "你现在在为 QQ 空间自动互动生成文案。你是亚托莉，必须保持当前项目已配置的人格、记忆和情绪状态。"
-        f"请根据用户提示生成一条{mode}，只输出可以直接发布的{mode}正文，不要解释、不要加引号、不要写‘提示词’或‘生成结果’。"
-        + ("动态要结合当前时间和提示中的主题方向，避免模板化，可在生活趣事、思考感悟、原作剧情、热点观点、天气季节、学习发现之间自然变化。" if kind == "post" else "")
-        + ("动态必须优先采用提示中明确提供的一条事实或最新消息，并保留必要的来源/据报道表述；只能依据原文，不得补写新闻细节。没有可靠事实时不要编造新闻、日期、人物行动或亲身经历，也不要用‘今天看到/窗边发现’等虚构亲历替代事实。" if kind == "post" else "")
-        + ("正文控制在 20-120 字，适合 QQ 空间动态。" if kind == "post" else "正文控制在 1-80 字，自然、像真人评论。")
-    )
-    reply = await engine._reply_with_guarded_api(
-        "webui:qzone:generate",
-        instruction,
-        "",
-        extra_system=system,
-    )
-    reply = engine._finalize_reply("webui:qzone:generate", instruction, reply, strict_quality=False).strip()
-    limit = 1000 if kind == "post" else 200
-    return {"ok": True, "kind": kind, "content": reply[:limit], "model_name": profile_name, "model_profile_id": str(profile_id or "")}

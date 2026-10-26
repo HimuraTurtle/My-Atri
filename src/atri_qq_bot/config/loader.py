@@ -336,6 +336,35 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         papers_timeout_seconds=max(
             10.0, min(60.0, _env_float("PAPERS_TIMEOUT_SECONDS", 30.0))
         ),
+        qzone_enabled=_env_bool("QZONE_ENABLED", False),
+        qzone_ai_tools_enabled=_env_bool("QZONE_AI_TOOLS_ENABLED", True),
+        qzone_timeout_seconds=max(
+            5.0, min(60.0, _env_float("QZONE_TIMEOUT_SECONDS", 20.0))
+        ),
+        qzone_session_ttl_seconds=max(
+            0.0, min(7200.0, _env_float("QZONE_SESSION_TTL_SECONDS", 600.0))
+        ),
+        qzone_visibility=max(0, min(2, _env_int("QZONE_VISIBILITY", 1))),
+        qzone_timezone=_env("QZONE_TIMEZONE", "Asia/Shanghai"),
+        qzone_auto_comment_enabled=_env_bool("QZONE_AUTO_COMMENT_ENABLED", True),
+        qzone_auto_comment_time=_env("QZONE_AUTO_COMMENT_TIME", "23:30"),
+        qzone_auto_comment_jitter_minutes=max(
+            0, min(120, _env_int("QZONE_AUTO_COMMENT_JITTER_MINUTES", 10))
+        ),
+        qzone_auto_comment_max=max(1, min(5, _env_int("QZONE_AUTO_COMMENT_MAX", 2))),
+        qzone_random_comment_probability=max(
+            0.0, min(1.0, _env_float("QZONE_RANDOM_COMMENT_PROBABILITY", 0.001))
+        ),
+        qzone_random_comment_cooldown_minutes=max(
+            1, min(1440, _env_int("QZONE_RANDOM_COMMENT_COOLDOWN_MINUTES", 30))
+        ),
+        qzone_devlog_enabled=_env_bool("QZONE_DEVLOG_ENABLED", True),
+        qzone_devlog_auto_publish=_env_bool("QZONE_DEVLOG_AUTO_PUBLISH", True),
+        qzone_devlog_daily_cap=max(0, min(10, _env_int("QZONE_DEVLOG_DAILY_CAP", 2))),
+        qzone_devlog_visibility_types=_env_str_tuple(
+            "QZONE_DEVLOG_VISIBILITY_TYPES",
+            BotConfig.qzone_devlog_visibility_types,
+        ),
         meme_learning_enabled=_env_bool("MEME_LEARNING_ENABLED", True),
         meme_learning_interval_hours=max(
             1, _env_int("MEME_LEARNING_INTERVAL_HOURS", 6)

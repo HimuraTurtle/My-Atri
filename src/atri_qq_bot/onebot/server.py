@@ -102,6 +102,7 @@ from .server_parts.server_manga import OneBotMangaMixin
 from .server_parts.server_meme_stealer import OneBotMemeStealMixin
 from .server_parts.server_minimax_draw import OneBotMinimaxDrawMixin
 from .server_parts.server_proactive import OneBotProactiveMixin
+from .server_parts.server_qzone import OneBotQzoneMixin
 from .server_parts.server_screen_watch import OneBotScreenWatchMixin
 from .server_parts.server_what_to_eat import OneBotWhatToEatMixin
 from .server_parts.server_who_is_who import OneBotWhoIsWhoMixin
@@ -120,6 +121,7 @@ class OneBotServer(
     OneBotWhoIsWhoMixin,
     OneBotMemeStealMixin,
     OneBotProactiveMixin,
+    OneBotQzoneMixin,
     OneBotScreenWatchMixin,
 ):
     """OneBot v11 的接入适配器。
@@ -160,6 +162,7 @@ async def run_server(config: Any) -> None:
         goodnight_task = asyncio.create_task(server.goodnight_loop())
         screen_watch_task = asyncio.create_task(server.screen_watch_loop())
         watch_party_task = asyncio.create_task(server.watch_party_loop())
+        qzone_task = asyncio.create_task(server.qzone_loop())
         webui_server = await start_webui(config, server)
         try:
             await asyncio.Future()
@@ -174,6 +177,7 @@ async def run_server(config: Any) -> None:
             goodnight_task.cancel()
             screen_watch_task.cancel()
             watch_party_task.cancel()
+            qzone_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await idle_task
             with contextlib.suppress(asyncio.CancelledError):
@@ -192,6 +196,8 @@ async def run_server(config: Any) -> None:
                 await screen_watch_task
             with contextlib.suppress(asyncio.CancelledError):
                 await watch_party_task
+            with contextlib.suppress(asyncio.CancelledError):
+                await qzone_task
             await server.shutdown()
             if getattr(server, "_manga_service", None) is not None:
                 with contextlib.suppress(Exception):

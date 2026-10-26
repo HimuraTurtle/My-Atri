@@ -42,6 +42,10 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
         tools.append(_fact_check_schema())
     if bool(getattr(config, "papers_enabled", True)):
         tools.append(_paper_search_schema())
+    if bool(getattr(config, "qzone_enabled", False)) and bool(
+        getattr(config, "qzone_ai_tools_enabled", True)
+    ):
+        tools.extend(_qzone_tool_schemas())
     if bool(getattr(config, "web_search_enabled", True)):
         tools.append(_weather_schema())
         tools.append(_web_search_schema(config))
@@ -475,6 +479,111 @@ def _fact_check_schema() -> dict[str, Any]:
             },
         },
     }
+
+
+def _qzone_tool_schemas() -> list[dict[str, Any]]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "qzone_view_recent_feeds",
+                "description": (
+                    "读取自己 QQ 空间的好友动态流（最近的好友说说）。"
+                    "用户想看看好友最近发了什么、空间里有什么新鲜事时使用；"
+                    "只读操作，不会留言或点赞。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "num": {
+                            "type": "integer",
+                            "description": "返回条数，默认 5，最多 10。",
+                            "minimum": 1,
+                            "maximum": 10,
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "qzone_view_user_feeds",
+                "description": (
+                    "读取指定 QQ 号的空间说说列表。用户问某人的空间、想看某个好友发了什么、"
+                    "或让你看看自己空间时使用；qq 留空表示读自己的空间。只读操作。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "qq": {
+                            "type": "string",
+                            "description": "目标 QQ 号（纯数字）；留空读自己的空间。",
+                        },
+                        "num": {
+                            "type": "integer",
+                            "description": "返回条数，默认 5，最多 20。",
+                            "minimum": 1,
+                            "maximum": 20,
+                        },
+                    },
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "qzone_like_feed",
+                "description": (
+                    "给一条 QQ 空间动态点赞。仅在与主人的私聊中可用；"
+                    "需要先通过 qzone_view_recent_feeds 或 qzone_view_user_feeds 拿到动态的 uin 和 tid。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uin": {
+                            "type": "string",
+                            "description": "动态所属的 QQ 号（纯数字）。",
+                        },
+                        "tid": {
+                            "type": "string",
+                            "description": "动态 ID，来自动态读取工具返回的 tid 字段。",
+                        },
+                    },
+                    "required": ["uin", "tid"],
+                },
+            },
+        },
+        {
+            "type": "function",
+            "function": {
+                "name": "qzone_comment_feed",
+                "description": (
+                    "给一条 QQ 空间动态留评论（以亚托莉的身份发出，公开可见）。"
+                    "仅在与主人的私聊中可用；需要先通过动态读取工具拿到 uin 和 tid。"
+                    "评论内容必须自然、简短（80 字以内），像真人朋友间的回应。"
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "uin": {
+                            "type": "string",
+                            "description": "动态所属的 QQ 号（纯数字）。",
+                        },
+                        "tid": {
+                            "type": "string",
+                            "description": "动态 ID，来自动态读取工具返回的 tid 字段。",
+                        },
+                        "content": {
+                            "type": "string",
+                            "description": "评论文本，1-80 字，不要使用「主人」称呼。",
+                        },
+                    },
+                    "required": ["uin", "tid", "content"],
+                },
+            },
+        },
+    ]
 
 
 def _paper_search_schema() -> dict[str, Any]:

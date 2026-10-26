@@ -173,6 +173,18 @@ class OneBotEventMixin(OneBotServerMixin):
         ):
             return
 
+        # QQ 空间口令（主人限定）：「发条说说」「更新日志」，确定性入口，
+        # 门控前拦截；发布失败时坦诚说明，绝不谎报已发布。
+        if is_message and await self._maybe_handle_qzone_command(
+            websocket, event, plain_text, conversation_id
+        ):
+            return
+
+        # QQ 空间聊天随机触发：被搭话的会话按概率在后台评论一条好友动态，
+        # 掷骰与排队是同步快操作，不会拖慢回复链路。
+        if is_message:
+            self._maybe_trigger_random_qzone_comment(event, addressed_to_bot)
+
         if not should_send_reply:
             return
 

@@ -6,10 +6,8 @@ PART = r"""        <div class="surface">
             <div class="row"><button class="ghost" onclick="runUserDirectoryRefresh(this)">刷新用户目录</button></div>
           </div>
           <div class="user-directory-integrated-toolbar">
-            <strong>QQ 空间连接</strong>
-            <span id="directoryQzoneBridgeAuth" class="note">正在检查 QQ 空间登录状态...</span>
-            <button class="ghost" onclick="directoryStartQZoneLogin()">登录 QQ 空间</button>
-            <button onclick="runUserDirectoryRefresh(this)">刷新好友动态与群聊计划</button>
+            <strong>会话状态</strong>
+            <button onclick="runUserDirectoryRefresh(this)">刷新用户目录与群聊计划</button>
             <label class="switch-line"><input id="directoryProactiveEnabled" type="checkbox" onchange="saveDirectoryProactiveToggle()">主动消息</label>
             <span id="directoryProactiveState" class="note">正在读取主动消息状态...</span>
           </div>
@@ -21,7 +19,7 @@ PART = r"""        <div class="surface">
           </div>
           <div class="toolbar">
             <label>搜索昵称 / 备注 / QQ<input id="userDirectorySearch" placeholder="输入 QQ 号、昵称、备注或群名片" oninput="renderUserDirectory()"></label>
-            <label>来源<select id="userDirectorySource" onchange="renderUserDirectory()"><option value="">全部来源</option><option value="memory">记忆</option><option value="qzone">QQ好友</option><option value="qzone_target">QQ动态策略</option><option value="insights">群聊总结</option><option value="modality">视觉/语音权限</option></select></label>
+            <label>来源<select id="userDirectorySource" onchange="renderUserDirectory()"><option value="">全部来源</option><option value="memory">记忆</option><option value="insights">群聊总结</option><option value="modality">视觉/语音权限</option></select></label>
             <label>对象类型<select id="userDirectoryEntityType" onchange="renderUserDirectory()"><option value="all" selected>用户与群聊</option><option value="user">用户</option><option value="group">群聊</option></select></label>
           </div>
           <p class="note" id="userDirectoryStatus">正在读取统一用户目录...</p>

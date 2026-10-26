@@ -27,7 +27,6 @@ window._activeProfileIds = {};
 window._profileTypes = [];
 window._proactive = null;
 window._minecraftData = null;
-window._qzoneFeeds = [];
 window._modalityAccess = null;
 window._userDirectory = {items:[], groups:[], selectedIds:[], sourceStatus:{}};
 function $(id) { return document.getElementById(id); }

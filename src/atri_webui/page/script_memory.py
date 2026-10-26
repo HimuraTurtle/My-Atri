@@ -3,7 +3,6 @@ from __future__ import annotations
 PART = r"""  const [m, proactive] = await Promise.all([api('/api/memory'), api('/api/proactive')]);
   const directory = window._userDirectory || {items:[],groups:[],total:0,groupTotal:0,sourceStatus:{}};
   const directorySourceStatus={...(window._userDirectory?.sourceStatus || {}), ...(directory.sourceStatus || {})};
-  if(window._userDirectory?.sourceStatus?.qzone==='ready' && directory.sourceStatus?.qzone==='not_refreshed') directorySourceStatus.qzone='ready';
   window._userDirectory = {items:directory.items || [], groups:directory.groups || [], total:Number(directory.total||0), groupTotal:Number(directory.groupTotal||directory.groups?.length||0), selectedIds:Array.isArray(window._userDirectory?.selectedIds) ? window._userDirectory.selectedIds : [], sourceStatus:directorySourceStatus};
   window._proactive = proactive;
   renderDirectoryProactiveState();

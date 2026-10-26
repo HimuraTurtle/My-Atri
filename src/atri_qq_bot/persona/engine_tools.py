@@ -579,6 +579,8 @@ class EngineToolsMixin(PersonaEngineMixin):
             return await self._execute_fact_check_tool(arguments, config)
         if name == "search_papers":
             return await self._execute_paper_search_tool(arguments, config)
+        if name.startswith("qzone_"):
+            return await self._execute_qzone_tool(conversation_id, name, arguments, config)
         return None
 
     async def _execute_fact_check_tool(
@@ -637,6 +639,79 @@ class EngineToolsMixin(PersonaEngineMixin):
             data = await service.search(query, limit=limit, sort=sort)
         except Exception as exc:
             return f"论文检索执行失败：{exc}。不要编造论文，坦诚说明没查到。"
+        return _json.dumps(data, ensure_ascii=False)
+
+    def _qzone_owner_allowed(self, conversation_id: str, config: Any) -> bool:
+        """点赞/评论是以机器人身份发出的公开动作，仅主人的私聊会话可用。"""
+        text = str(conversation_id or "")
+        if not text.startswith("private:"):
+            return False
+        try:
+            user_qq = int(text.split(":", 1)[1])
+        except (IndexError, ValueError):
+            return False
+        return user_qq in {int(qq) for qq in getattr(config, "owner_qqs", ())}
+
+    async def _execute_qzone_tool(
+        self,
+        conversation_id: str,
+        name: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import asyncio
+        import json as _json
+
+        from ..qzone import get_qzone_service
+
+        service = get_qzone_service(config)
+        if service is None:
+            return "QQ 空间功能未启用，请直接用文字自然回复。"
+        timeout = max(
+            30.0, float(getattr(config, "qzone_timeout_seconds", 20.0) or 20.0) * 3
+        )
+
+        def _int_arg(key: str, default: int, low: int, high: int) -> int:
+            try:
+                return max(low, min(high, int(arguments.get(key) or default)))
+            except (TypeError, ValueError):
+                return default
+
+        try:
+            if name == "qzone_view_recent_feeds":
+                data = await asyncio.wait_for(
+                    service.view_recent_feeds(_int_arg("num", 5, 1, 10)), timeout=timeout
+                )
+            elif name == "qzone_view_user_feeds":
+                qq = str(arguments.get("qq") or "").strip() or str(getattr(config, "bot_qq", "") or "")
+                data = await asyncio.wait_for(
+                    service.view_user_feeds(qq, _int_arg("num", 5, 1, 20)), timeout=timeout
+                )
+            elif name in ("qzone_like_feed", "qzone_comment_feed"):
+                if not self._qzone_owner_allowed(conversation_id, config):
+                    return (
+                        "当前会话无权代发公开互动（点赞/评论仅限与主人的私聊）。"
+                        "请向用户说明自己只能在被授权的会话里做这类操作。"
+                    )
+                uin = str(arguments.get("uin") or "").strip()
+                tid = str(arguments.get("tid") or "").strip()
+                if not uin.isdigit() or not tid:
+                    return "uin/tid 无效。请先通过动态读取工具拿到目标动态的 uin 和 tid 再调用。"
+                if name == "qzone_like_feed":
+                    data = await asyncio.wait_for(service.like_feed(uin, tid), timeout=timeout)
+                else:
+                    content = str(arguments.get("content") or "").strip()
+                    data = await asyncio.wait_for(
+                        service.comment_feed(uin, tid, content), timeout=timeout
+                    )
+            else:
+                return None
+        except asyncio.TimeoutError:
+            return "QQ 空间操作执行超时。不要假装操作成功，可建议稍后再试。"
+        except RuntimeError as exc:
+            return f"QQ 空间操作暂不可用：{exc}。不要编造结果。"
+        except Exception as exc:
+            return f"QQ 空间操作执行失败：{exc}。不要编造结果。"
         return _json.dumps(data, ensure_ascii=False)
 
     async def _execute_minimax_draw_tool(
