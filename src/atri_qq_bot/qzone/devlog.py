@@ -1,23 +1,24 @@
 """ATRI 开发日志：把代码提交转写成 ATRI 口吻的开发手记并发布到 QQ 空间。
 
-设计约束（与全项目降级契约一致）：
-- 提交信息是唯一事实源，生成失败、无可见变更时静默或保留草稿，绝不编造。
-- 公开平台安全闸：类型白名单 + 敏感信息拦截 + 每日上限。
-- 幂等：草稿/发布状态机由 SQLite 原子更新保证，跨进程不会重复发布。
+从旧 atri_webui.qzone_automation.devlog 移植，设计约束保持不变：
+- 提交信息是唯一事实源，生成失败、无可见变更时静默或保留草稿，绝不编造；
+- 公开平台安全闸：类型白名单 + 敏感信息拦截 + 每日上限；
+- 幂等：草稿/发布状态机由 SQLite 原子更新保证，不会重复发布。
+
+差异：生成器与发布器改为异步回调（由 service 层注入），开关与上限改由
+.env 配置（qzone_devlog_*）提供；「更新日志」主人口令触发完整闭环。
 """
 
 from __future__ import annotations
 
-import json
 import re
 import subprocess
 import time
 from datetime import datetime
-from typing import Any, Callable
+from typing import Any, Awaitable, Callable
 
-from atri_qq_bot.runtime import PROJECT_ROOT
-
-from .rules import DEFAULT_SETTINGS, devlog_material_prompt, resolve_timezone
+from ..runtime.paths import PROJECT_ROOT
+from .rules import resolve_timezone
 
 DEVLOG_SCAN_INTERVAL_SECONDS = 600.0
 DEVLOG_GENERATE_RETRY_SECONDS = 300.0
@@ -60,6 +61,9 @@ _SENSITIVE_SUBJECT_PATTERNS = tuple(
 )
 _UNCERTAIN_SEND_MARKERS = ("timed out", "timeout", "time-out", "超时")
 
+# 开发日志素材里的提交上限；超出的最老提交会被折叠成“另有 N 项更早改动”。
+DEVLOG_MAX_COMMITS_PER_POST = 15
+
 
 class DevLogUnavailable(RuntimeError):
     """git 不可用或仓库缺失，采集层必须整体降级而不是编造提交。"""
@@ -88,6 +92,29 @@ def is_sensitive_subject(subject: str) -> bool:
     """公开安全闸：包含链接、路径、密钥、邮箱等内部信息的提交不外发。"""
     text = str(subject or "")
     return any(pattern.search(text) for pattern in _SENSITIVE_SUBJECT_PATTERNS)
+
+
+def devlog_material_prompt(commits: list[dict[str, Any]]) -> str:
+    """把可见提交转写成给生成模型的素材提示词；反编造约束直接写进提示词。"""
+    lines = [
+        f"- {str(item.get('commit_type') or 'feat')}：{str(item.get('subject') or '').strip()}"
+        for item in commits[:DEVLOG_MAX_COMMITS_PER_POST]
+        if str(item.get("subject") or "").strip()
+    ]
+    overflow = max(0, len(commits) - DEVLOG_MAX_COMMITS_PER_POST)
+    tail = f"- 另有 {overflow} 项更早或内部维护改动，不展开。" if overflow else ""
+    return (
+        "以亚托莉的第一人称写一条 QQ 空间开发手记，分享自己刚完成的更新。\n"
+        "以下是本次更新的代码提交记录（类型：说明）：\n"
+        + "\n".join([*lines, tail])
+        + "\n要求：\n"
+        "1. 只描述这些提交明确写到的内容，不得虚构没做过的功能，不得编造数字、细节或亲历场景。\n"
+        "2. 自然口语化，像机器女孩自然分享近况，可以带一点点小自豪，但不要夸张。\n"
+        "3. 不提及文件路径、代码、接口、密钥、内部工具名等细节，只讲学会了什么、修好了什么。\n"
+        "4. 不得使用「主人」等称呼，也不需要对任何特定的人喊话。\n"
+        "5. 控制在 40-140 字，不要分点列条，一两句话自然收尾。\n"
+        "6. 只输出可直接发布的正文，不要解释、不要引号。"
+    )
 
 
 def _run_git(root: Any, *args: str, timeout: float = 20.0) -> str:
@@ -144,23 +171,42 @@ def collect_commits(root: Any, since_sha: str = "") -> list[dict[str, Any]]:
     return commits
 
 
-class DevLogService:
+PostGenerator = Callable[[str], Awaitable[dict[str, Any]]]
+Publisher = Callable[[str], Awaitable[dict[str, Any]]]
+
+
+class DevLog:
     """采集 → 生成 → 发布的开发手记闭环；状态机由 store 的原子更新保证幂等。"""
 
     def __init__(
         self,
         store: Any,
-        admin_factory: Callable[[], Any],
-        post_generator: Callable[[str, str], Any] | None,
+        config: Any,
+        post_generator: PostGenerator | None,
+        publisher: Publisher | None,
         root: Any | None = None,
     ) -> None:
         self.store = store
-        self.admin_factory = admin_factory
+        self.config = config
         self.post_generator = post_generator
+        self.publisher = publisher
         self.root = PROJECT_ROOT if root is None else root
         self._scan_after = 0.0
         self._generate_after = 0.0
         self._publish_after = 0.0
+
+    # ---- 配置 ----
+
+    def _visibility_types(self) -> list[str]:
+        raw = getattr(self.config, "qzone_devlog_visibility_types", ())
+        if isinstance(raw, str):
+            values = raw.replace("，", ",").split(",")
+        else:
+            values = list(raw or ())
+        return [str(item).strip().casefold() for item in values if str(item).strip()]
+
+    def _daily_cap(self) -> int:
+        return max(0, min(10, int(getattr(self.config, "qzone_devlog_daily_cap", 2) or 0)))
 
     # ---- 采集 ----
 
@@ -177,7 +223,7 @@ class DevLogService:
             for item in usable:
                 item["commit_type"] = classify_commit(str(item.get("subject") or ""))
                 item["visible"] = (
-                    item["commit_type"] in set(self._visibility_types(settings))
+                    item["commit_type"] in set(self._visibility_types())
                     and not is_sensitive_subject(str(item.get("subject") or ""))
                 )
             added = self.store.devlog_add_commits(usable)
@@ -198,17 +244,9 @@ class DevLogService:
             "visible_added": visible_added,
         }
 
-    def _visibility_types(self, settings: dict[str, Any]) -> list[str]:
-        raw = settings.get("devlog_visibility_types")
-        if isinstance(raw, list):
-            values = raw
-        else:
-            values = str(raw or "").replace("，", ",").split(",")
-        return [str(item).strip().casefold() for item in values if str(item).strip()]
-
     # ---- 生成 ----
 
-    def generate(self, *, force: bool = False) -> dict[str, Any]:
+    async def generate(self, *, force: bool = False) -> dict[str, Any]:
         existing = self.store.devlog_draft()
         if existing is not None:
             return {"ok": True, "item": existing, "skipped": "已有草稿"}
@@ -219,11 +257,9 @@ class DevLogService:
             return {"ok": True, "skipped": "没有待写进手记的提交"}
         if self.post_generator is None:
             return {"ok": True, "skipped": "生成器尚未就绪"}
-        settings = self.store.settings()
         prompt = devlog_material_prompt(pending)
-        model_id = str(settings.get("post_model_profile_id") or "")
         try:
-            generated = self.post_generator(prompt, model_id)
+            generated = await self.post_generator(prompt)
             content = str((generated or {}).get("content") or "").strip()
         except Exception as exc:
             # 生成失败保留待写提交，退避后重试；绝不编一条“今天没有更新”充数。
@@ -240,7 +276,6 @@ class DevLogService:
             content,
             commit_shas=[str(entry.get("sha") or "") for entry in pending],
             prompt=prompt,
-            model_profile_id=model_id,
         )
         if item is None:
             item = self.store.devlog_draft()
@@ -261,16 +296,15 @@ class DevLogService:
 
     # ---- 发布 ----
 
-    def publish(self, *, post_id: int | None = None) -> dict[str, Any]:
+    async def publish(self, *, force: bool = False) -> dict[str, Any]:
         now = time.time()
-        if post_id is None and now < self._publish_after:
+        if not force and now < self._publish_after:
             return {"ok": True, "skipped": "发布冷却中"}
-        draft = self.store.devlog_draft() if post_id is None else self._post_by_id(post_id)
+        draft = self.store.devlog_draft()
         if draft is None or str(draft.get("status") or "") != "draft":
             return {"ok": True, "skipped": "没有可发布的草稿"}
-        settings = self.store.settings()
-        cap = max(0, min(10, int(settings.get("devlog_daily_cap", 2) or 0)))
-        zone = resolve_timezone(settings.get("timezone"))
+        cap = self._daily_cap()
+        zone = resolve_timezone(getattr(self.config, "qzone_timezone", "Asia/Shanghai"))
         midnight = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         if cap and self.store.devlog_count_published_since(midnight) >= cap:
             return {"ok": True, "skipped": "已达每日开发手记上限"}
@@ -281,49 +315,31 @@ class DevLogService:
         if not self.store.devlog_begin_publish(resolved_id):
             return {"ok": True, "skipped": "草稿已被其他进程发布"}
         try:
-            result = self.admin_factory().post(content, int(settings.get("visibility", 1)))
-            tid = str((result or {}).get("tid") or "")
+            if self.publisher is None:
+                raise RuntimeError("发布器尚未就绪")
+            result = await self.publisher(content)
+            tid = str((result or {}).get("data", {}).get("tid") or "")
             self.store.devlog_finish_publish(resolved_id, tid)
             self.store.log("devlog_post", tid=tid, content=content)
             self._publish_after = 0.0
-            return {"ok": True, "post_id": resolved_id, "tid": tid}
+            return {"ok": True, "post_id": resolved_id, "tid": tid, "content": content}
         except Exception as exc:
             message = str(exc)
             uncertain = any(marker in message.casefold() for marker in _UNCERTAIN_SEND_MARKERS)
-            # 超时属于“可能已发出”的不确定态：放弃自动重发（对齐现有 uncertain
-            # 槽位语义）；确定失败则保留提交、退避后用新草稿重试。
+            # 超时属于“可能已发出”的不确定态：放弃自动重发；确定失败则
+            # 保留提交、退避后用新草稿重试。
             self.store.devlog_fail_publish(resolved_id, message, consume_commits=uncertain)
             self.store.log("devlog_post", content=content, status="failed", error=message)
             if not uncertain:
                 self._publish_after = time.time() + DEVLOG_PUBLISH_RETRY_SECONDS
             return {"ok": False, "post_id": resolved_id, "error": message, "uncertain": uncertain}
 
-    def _post_by_id(self, post_id: int) -> dict[str, Any] | None:
-        for item in self.store.devlog_posts(100):
-            if int(item.get("id") or 0) == int(post_id):
-                return item
-        return None
+    # ---- 闭环与状态 ----
 
-    def delete_draft(self, post_id: int) -> dict[str, Any]:
-        draft = self.store.devlog_draft()
-        if draft is not None and int(draft["id"]) == int(post_id):
-            # 手记草稿被删除后，其快照提交回到待写状态，下一轮重新聚合。
-            try:
-                shas = [str(item) for item in json.loads(str(draft.get("commit_shas") or "[]"))]
-            except json.JSONDecodeError:
-                shas = []
-            self.store.devlog_delete_post(int(post_id))
-            return {"ok": True, "released": len(shas)}
-        self.store.devlog_delete_post(int(post_id))
-        return {"ok": True, "released": 0}
-
-    # ---- 周期与状态 ----
-
-    def run_cycle(self, *, force: bool = False) -> dict[str, Any]:
-        """30 秒循环调用：扫描（节流）→ 生成（去重）→ 自动发布（带上限）。"""
-        settings = self.store.settings()
-        if not settings.get("devlog_enabled"):
-            return {"ok": True, "skipped": "开发日志未启用"}
+    async def cycle(self, *, force: bool = False, auto_publish: bool = True) -> dict[str, Any]:
+        """「更新日志」触发的完整闭环：扫描 → 生成 → 发布（带上限闸）。"""
+        if not bool(getattr(self.config, "qzone_devlog_enabled", True)):
+            return {"ok": False, "skipped": "开发日志未启用"}
         result: dict[str, Any] = {"ok": True}
         try:
             result["scan"] = self.scan(force=force)
@@ -332,13 +348,13 @@ class DevLogService:
             self.store.log("devlog_scan", status="failed", error=str(exc))
             result["scan"] = {"ok": False, "error": str(exc)}
         try:
-            result["generate"] = self.generate()
+            result["generate"] = await self.generate(force=force)
         except Exception as exc:
             self.store.log("devlog_generate", status="failed", error=str(exc))
             result["generate"] = {"ok": False, "error": str(exc)}
-        if bool(settings.get("devlog_auto_publish", DEFAULT_SETTINGS["devlog_auto_publish"])):
+        if auto_publish or bool(getattr(self.config, "qzone_devlog_auto_publish", True)):
             try:
-                result["publish"] = self.publish()
+                result["publish"] = await self.publish(force=force)
             except Exception as exc:
                 self.store.log("devlog_post", status="failed", error=str(exc))
                 result["publish"] = {"ok": False, "error": str(exc)}
@@ -346,19 +362,16 @@ class DevLogService:
 
     def status(self) -> dict[str, Any]:
         settings = self.store.settings()
-        zone = resolve_timezone(settings.get("timezone"))
+        zone = resolve_timezone(getattr(self.config, "qzone_timezone", "Asia/Shanghai"))
         midnight = datetime.now(zone).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
         pending = self.store.devlog_pending_commits()
         return {
             "ok": True,
-            "settings": {
-                "devlog_enabled": bool(settings.get("devlog_enabled")),
-                "devlog_auto_publish": bool(settings.get("devlog_auto_publish")),
-                "devlog_visibility_types": settings.get("devlog_visibility_types"),
-                "devlog_daily_cap": int(settings.get("devlog_daily_cap", 2) or 0),
-                "devlog_last_scan_at": float(settings.get("devlog_last_scan_at") or 0),
-                "post_model_profile_id": str(settings.get("post_model_profile_id") or ""),
-            },
+            "enabled": bool(getattr(self.config, "qzone_devlog_enabled", True)),
+            "auto_publish": bool(getattr(self.config, "qzone_devlog_auto_publish", True)),
+            "visibility_types": self._visibility_types(),
+            "daily_cap": self._daily_cap(),
+            "last_scan_at": float(settings.get("devlog_last_scan_at") or 0),
             "pending": pending[:30],
             "pending_count": len(pending),
             "draft": self.store.devlog_draft(),

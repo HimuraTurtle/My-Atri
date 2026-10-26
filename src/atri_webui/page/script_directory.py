@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-PART = r"""  return ({memory:'记忆',qzone:'QQ好友',qzone_target:'QQ动态策略',insights:'群聊总结',modality:'视觉/语音权限',config:'配置'})[source] || source || '未知来源';
+PART = r"""  return ({memory:'记忆',insights:'群聊总结',modality:'视觉/语音权限',config:'配置'})[source] || source || '未知来源';
 }
 function userDirectoryCapabilityLabel(capability) {
-  return ({like:'自动点赞',comment:'自动评论',vision:'视觉模型',voice:'语音模型',memory:'记忆'})[capability] || capability;
+  return ({vision:'视觉模型',voice:'语音模型',memory:'记忆'})[capability] || capability;
 }
 function userDirectoryTimeText(value) {
   if(value === null || value === undefined || value === '') return '暂无';
@@ -40,92 +40,13 @@ function userDirectoryMemoryCardMarkup(item) {
   const proactive=plan.eligible===false?'未入选':(plan.eligible?'已入选':(data.proactive_override ? '按计划' : '暂无计划'));
   return `<span class="user-directory-inline-memory"><strong>记忆关系与上下文</strong><span class="card-context-values"><span>好感 ${formatScore(data.affection)}</span><span>信任 ${escapeHtml(data.trust_label || data.trust_tier || '观察中')}</span><span>记忆 ${memoryCountText(counts)}</span><span>消息 ${Number(data.messages||item?.message_count||0)}</span></span><span class="card-context-summary">${escapeHtml(summary)}</span><span class="memory-meta">主动互动：${escapeHtml(proactive)} · 下次内容：${escapeHtml(nextType)} · ${escapeHtml(nextAt)}</span></span>`;
 }
-function userDirectoryFeed(item) {
-  const userId = String(item?.user_id || '');
-  return (window._qzoneLatestFeeds || []).find(row=>String(row.user_id || '')===userId) || null;
-}
-async function loadDirectoryQZoneLoginStatus() {
-  const target=$('directoryQzoneBridgeAuth');
-  if(window._directoryQzoneStatusPromise) return window._directoryQzoneStatusPromise;
-  const request=(async()=>{
-    try {
-      const data=await api('/api/qzone/login-status');
-      window._directoryQzoneLoggedIn=Boolean(data.logged_in);
-      if(target) {
-        target.textContent=data.logged_in ? `QQ 空间已登录${data.qq?' · QQ '+data.qq:''}` : (data.login_running?'正在等待 QQ 空间登录…':(data.reachable?'Bridge 在线但未登录':'QQ 空间 Bridge 未启动'));
-        target.className='note '+(data.logged_in?'ok':(data.reachable?'warn':'bad'));
-      }
-      return data;
-    } catch(error) {
-      window._directoryQzoneLoggedIn=false;
-      if(target) { target.textContent='登录状态读取失败：'+error.message; target.className='note bad'; }
-      return {logged_in:false,reachable:false,error:String(error?.message||error)};
-    }
-  })();
-  window._directoryQzoneStatusPromise=request;
-  try { return await request; }
-  finally { if(window._directoryQzoneStatusPromise===request) window._directoryQzoneStatusPromise=null; }
-}
 function directoryWithTimeout(promise, timeoutMs=2200) {
   return Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('timeout')),timeoutMs))]);
 }
-async function refreshDirectoryQZoneData() {
-  // 先读本地群聊总结计划；它不依赖 QQ 空间 Bridge。
+async function loadDirectorySchedules() {
   const schedules=await directoryWithTimeout(api('/api/group-summaries/schedules'),1800).catch(()=>({schedules:[]}));
   window._summarySchedules=schedules.schedules||window._summarySchedules||[];
   renderUserDirectory();
-  try {
-    // 复用首屏已经发出的状态请求，避免同时向 Bridge 发两次 /status。
-    const status=await loadDirectoryQZoneLoginStatus();
-    window._directoryQzoneLoggedIn=Boolean(status.logged_in);
-    // 即使 /status 暂时误报或超时，也尝试读取动态；动态接口本身才是最终登录判据。
-    // Bridge 分页通常需要 10–20 秒，因此在后台给足时间，不阻塞用户目录首屏。
-    const feeds=await api('/api/qzone/feeds/all?limit=50');
-    const freshFeeds=Array.isArray(feeds.feeds) ? feeds.feeds : [];
-    if(freshFeeds.length) {
-      window._directoryQzoneLoggedIn=true;
-      window._qzoneLatestFeeds=freshFeeds;
-    } else if(!window._qzoneLatestFeeds) window._qzoneLatestFeeds=[];
-    const feedErrors=Array.isArray(feeds.errors) ? feeds.errors.filter(Boolean) : [];
-    if(window._userDirectory) window._userDirectory.sourceStatus={...(window._userDirectory.sourceStatus||{}),qzone:freshFeeds.length?(feedErrors.length?'partial':'ready'):(status.logged_in?'partial':'login_required')};
-    try { localStorage.setItem('atri.qzone.latestFeeds', JSON.stringify(window._qzoneLatestFeeds)); } catch(error) { /* private mode/storage quota */ }
-    window._directoryQzoneFeedError=feedErrors.length ? feedErrors.join('；') : '';
-    renderUserDirectory();
-  } catch(error) { window._directoryQzoneFeedError=String(error?.message||error); await loadDirectoryQZoneLoginStatus(); renderUserDirectory(); }
-}
-async function loadDirectoryAutomationState(retry=true) {
-  // 这是本地 SQLite 数据，和 Bridge 无关。首屏后台读取即可，不应使用过短
-  // 超时把一次有效响应丢掉；同时合并并发调用，避免保存/刷新时覆盖状态。
-  if(window._directoryAutomationPromise) return window._directoryAutomationPromise;
-  window._directoryAutomationLoading=true;
-  window._directoryAutomationError='';
-  const request=(async()=>{
-    try {
-      const data=await api('/api/qzone/automation');
-      window._qzoneAutomation={...(window._qzoneAutomation||{}),...data};
-      return data;
-    } catch(error) {
-      window._directoryAutomationError=String(error?.message||error);
-      if(retry) setTimeout(()=>loadDirectoryAutomationState(false),3000);
-      return null;
-    } finally {
-      window._directoryAutomationLoading=false;
-      renderUserDirectory();
-    }
-  })();
-  window._directoryAutomationPromise=request;
-  try { return await request; }
-  finally { if(window._directoryAutomationPromise===request) window._directoryAutomationPromise=null; }
-}
-async function directoryStartQZoneLogin() {
-  const target=$('directoryQzoneBridgeAuth');
-  if(target) { target.textContent='正在打开 QQ 空间登录页…'; target.className='note warn'; }
-  try {
-    await api('/api/qzone/login',{method:'POST',body:JSON.stringify({})});
-    if(target) target.textContent='登录页已打开，请完成 QQ 空间登录';
-    const timer=setInterval(async()=>{ await loadDirectoryQZoneLoginStatus(); const data=await api('/api/qzone/login-status').catch(()=>({})); if(data.logged_in){clearInterval(timer); await loadUserDirectory(true);} },2000);
-    setTimeout(()=>clearInterval(timer),300000);
-  } catch(error) { if(target) { target.textContent='无法启动登录：'+error.message; target.className='note bad'; } }
 }
 function renderDirectoryProactiveState() {
   const state=window._proactive||{}; const policy=state.policy||{}; const enabled=state.feature_enabled!==false && policy.enabled!==false;
@@ -136,25 +57,6 @@ async function saveDirectoryProactiveToggle() {
   const enabled=Boolean($('directoryProactiveEnabled')?.checked); const current=JSON.parse(JSON.stringify(window._proactive?.policy||{})); current.enabled=enabled;
   try { await api('/api/config',{method:'POST',body:JSON.stringify({PROACTIVE_V2_ENABLED:enabled})}); await api('/api/proactive/save',{method:'POST',body:JSON.stringify(current)}); window._proactive={...(window._proactive||{}),policy:current,feature_enabled:enabled}; renderDirectoryProactiveState(); toast(enabled?'主动消息已启用':'主动消息已暂停'); }
   catch(error) { toast('主动消息设置保存失败：'+error.message); renderDirectoryProactiveState(); }
-}
-function userDirectoryInlineFeedMarkup(item) {
-  if(window._directoryQzoneLoggedIn===false) return '';
-  const feed = userDirectoryFeed(item);
-  if(!feed) return `<div class="user-directory-context qzone-context"><h4>QQ 动态</h4><p class="note">尚未读取到该用户的最新动态；QQ 空间登录后将在此处补齐。</p></div>`;
-  const userId = String(feed.user_id || item.user_id || '');
-  const tid = String(feed.tid || '');
-  const policy=qzonePolicy(userId) || {};
-  return `<div class="user-directory-context qzone-context"><div class="section-head"><h4>最新 QQ 动态</h4><span class="memory-meta">${escapeHtml(qzoneFeedTimeText(feed))}</span></div><div class="qzone-feed-content">${escapeHtml(feed.content || '[无文字动态]')}</div><p class="memory-meta">点赞 ${Number(feed.like_count||0)} · 评论 ${Number(feed.comment_count||0)} · 图片 ${Number(feed.image_count||0)}</p><div class="qzone-auto-switches"><strong>自动互动</strong><label><input type="checkbox" ${policy.enabled_like?'checked':''} onchange="saveQZonePersonPolicy('${escapeHtml(userId)}','enabled_like',this.checked)">自动点赞</label><label><input type="checkbox" ${policy.enabled_comment?'checked':''} onchange="saveQZonePersonPolicy('${escapeHtml(userId)}','enabled_comment',this.checked)">自动评论</label></div><div class="qzone-manual-actions" data-feed-content="${escapeHtml(feed.content || '[无文字动态]')}"><button class="ghost" onclick="manualLikeQZoneFeed('${escapeHtml(userId)}','${escapeHtml(tid)}',${Number(feed.abstime||0)},this)">点赞这条动态</button><button class="ghost" onclick="generateQZoneCommentFromButton('${escapeHtml(userId)}','${escapeHtml(tid)}',this)">AI生成评论</button><textarea class="qzone-ai-comment" maxlength="200" placeholder="模型生成后可编辑"></textarea><button onclick="publishQZoneGeneratedComment('${escapeHtml(userId)}','${escapeHtml(tid)}',${Number(feed.abstime||0)},this.previousElementSibling)">发表评论</button></div><button class="ghost" onclick="loadUserDirectoryFullQZone(this,'${escapeHtml(userId)}')">在此卡片展开完整空间</button><div class="user-directory-full-qzone"></div></div>`;
-}
-async function loadUserDirectoryFullQZone(button, userId) {
-  const panel=button?.parentElement?.querySelector('.user-directory-full-qzone');
-  if(!panel) return;
-  if(panel.dataset.loaded==='1') { panel.hidden=!panel.hidden; return; }
-  panel.hidden=false; panel.innerHTML='<p class="note">正在读取完整空间动态…</p>';
-  try {
-    const data=await api(`/api/qzone/feeds?user_id=${encodeURIComponent(userId)}&limit=50`); const feeds=data.feeds||[];
-    panel.dataset.loaded='1'; panel.innerHTML=feeds.map(feed=>`<article class="qzone-detail-item"><div class="memory-meta">${escapeHtml(qzoneFeedTimeText(feed))}</div><div class="qzone-feed-content">${escapeHtml(feed.content||'[无文字动态]')}</div><div class="memory-meta">点赞 ${Number(feed.like_count||0)} · 评论 ${Number(feed.comment_count||0)}</div><div class="qzone-manual-actions" data-feed-content="${escapeHtml(feed.content||'[无文字动态]')}"><button class="ghost" onclick="manualLikeQZoneFeed('${escapeHtml(userId)}','${escapeHtml(feed.tid||'')}',${Number(feed.abstime||0)},this)">点赞这条动态</button><button class="ghost" onclick="generateQZoneCommentFromButton('${escapeHtml(userId)}','${escapeHtml(feed.tid||'')}',this)">AI生成评论</button><textarea class="qzone-ai-comment" maxlength="200" placeholder="模型生成后可编辑"></textarea><button onclick="publishQZoneGeneratedComment('${escapeHtml(userId)}','${escapeHtml(feed.tid||'')}',${Number(feed.abstime||0)},this.previousElementSibling)">发表评论</button></div></article>`).join('') || '<p class="note">暂无可见动态。</p>';
-  } catch(error) { panel.innerHTML=`<p class="bad">读取完整空间失败：${escapeHtml(error.message)}</p>`; }
 }
 function directorySummaryControlId(groupId, kind, suffix) {
   return ('directory_summary_' + kind + '_' + groupId + '_' + suffix).replace(/[^a-zA-Z0-9_-]/g,'_');
@@ -195,41 +97,6 @@ async function saveDirectoryGroupSummaryCore(groupId) {
   try { await api('/api/group-summaries/schedules',{method:'POST',body:JSON.stringify({group_id:String(groupId),daily:plan('daily'),weekly:plan('weekly'),monthly:plan('monthly')})}); toast('群聊总结计划已保存'); const data=await api('/api/group-summaries/schedules'); window._summarySchedules=data.schedules||[]; renderUserDirectory(); }
   catch(error) { toast('群聊总结计划保存失败：'+error.message); }
 }
-function userDirectoryAtriPublisherMarkup() {
-  if(!window._qzoneAutomation) {
-    const error=String(window._directoryAutomationError||'');
-    return `<div class="user-directory-context proactive-context atri-directory-publisher"><div class="section-head"><h4>亚托莉专属：自动发布动态</h4><span class="badge ${error?'red':'warn'}">${error?'读取失败':'读取中'}</span></div><p class="note">${error?'自动发布配置读取失败：'+escapeHtml(error):'正在读取已保存的发布设置、下一条动态和历史记录…'}</p>${error?'<button class="ghost" onclick="loadDirectoryAutomationState(false)">重新读取</button>':''}</div>`;
-  }
-  const settings = window._qzoneAutomation?.settings || {};
-  const next = window._qzoneAutomation?.next_post || {};
-  const item = next.item || {};
-  const pool=Array.isArray(window._qzoneAutomation?.content_pool) ? window._qzoneAutomation.content_pool : [];
-  const visiblePool=pool.filter(row=>row && row.content).slice(0,8);
-  const poolStatus=(status)=>status==='published'?'已发布':(status==='rejected'?'未发布 · 已拒绝':(status==='failed'?'未发布 · 失败':(status==='pending'?'未发布 · 待发布':'未发布')));
-  const poolStatusClass=(status)=>status==='published'?'active':(status==='rejected'||status==='failed'?'red':'warn');
-  const poolMarkup=visiblePool.length ? `<div class="atri-pool">${visiblePool.map(row=>`<article class="atri-pool-item"><div class="pool-head"><span class="badge ${poolStatusClass(row.status)}">${poolStatus(row.status)}</span><span class="memory-meta">${row.published_at?qzoneDate(row.published_at):(row.scheduled_at?'计划 '+qzoneDate(row.scheduled_at):'')}</span></div><div class="pool-content">${escapeHtml(row.content)}</div>${row.last_error?`<div class="memory-meta">原因：${escapeHtml(row.last_error)}</div>`:''}</article>`).join('')}</div>` : '<div class="memory-meta">暂无内容池记录。</div>';
-  const commentPool=Array.isArray(window._qzoneAutomation?.comment_pool) ? window._qzoneAutomation.comment_pool.filter(row=>row && row.content).slice(0,6) : [];
-  const commentPoolMarkup=commentPool.length ? `<div class="atri-pool">${commentPool.map(row=>`<article class="atri-pool-item"><div class="pool-head"><span class="badge ${poolStatusClass(row.status)}">${poolStatus(row.status)}</span><span class="memory-meta">${row.generated_at?qzoneDate(row.generated_at):''}</span></div><div class="pool-content">${escapeHtml(row.content)}</div></article>`).join('')}</div>` : '<div class="memory-meta">暂无评论池内容；评论会根据动态列表由模型生成。</div>';
-  const postLogs=(window._qzoneAutomation?.logs||[]).filter(row=>row.action==='post').slice(0,5);
-  const logMarkup=postLogs.length ? `<div class="atri-pool">${postLogs.map(row=>`<article class="atri-pool-item"><div class="pool-head"><span class="badge ${row.status==='success'?'active':'red'}">${row.status==='success'?'发布成功':'发布失败'}</span><span class="memory-meta">${qzoneDate(row.created_at)}</span></div><div class="pool-content">${escapeHtml(row.content||row.error||'无正文')}</div></article>`).join('')}</div>` : '<div class="memory-meta">暂无发布日志。</div>';
-  const nextContent=item.content || (next.auto_generate?'到达计划时间后由模型生成正文并发布':'暂无待发布动态');
-  return `<div class="user-directory-context proactive-context atri-directory-publisher"><div class="section-head"><div><h4>亚托莉专属：自动发布动态</h4><p class="note">发布配置、下一条内容、内容池和发布记录均在此卡片内。</p></div><span class="badge ${settings.post_enabled?'active':'warn'}">${settings.post_enabled?'已启用':'已暂停'}</span></div><div class="qzone-next-post"><div class="memory-meta">下一条：${next.scheduled_at?qzoneDate(next.scheduled_at):'尚未排期'}</div><div class="qzone-next-post-content">${escapeHtml(nextContent)}</div><div class="memory-meta">${next.auto_generate?'到点自动生成':'已准备正文'} · ${settings.post_model_profile_id?escapeHtml(settings.post_model_profile_id):'当前聊天模型'}</div></div><div class="qzone-auto-switches"><strong>自动互动</strong><label><input id="directoryQzoneLikeEnabled" type="checkbox" ${settings.like_enabled?'checked':''}>自动点赞</label><label><input id="directoryQzoneCommentEnabled" type="checkbox" ${settings.comment_enabled?'checked':''}>自动评论</label><span class="memory-meta">保存后生效</span></div><div class="card-context-values"><span>今日发布：${Number(window._qzoneAutomation?.today?.post||0)}</span><span>今日点赞：${Number(window._qzoneAutomation?.today?.like||0)}</span><span>今日评论：${Number(window._qzoneAutomation?.today?.comment||0)}</span></div><details open><summary>内容池（${visiblePool.length} 条）</summary>${poolMarkup}</details><details><summary>评论池（${commentPool.length} 条）</summary>${commentPoolMarkup}</details><details open><summary>已发布记录（${postLogs.length} 条）</summary>${logMarkup}</details><details class="devlog-details"><summary>开发日志（今日 ${Number(window._qzoneAutomation?.devlog?.published_today||0)} 篇 · 待写 ${Number(window._qzoneAutomation?.devlog?.pending_count||0)} 条提交）</summary>${userDirectoryDevlogMarkup()}</details><div class="form-grid qzone-form-grid"><label class="switch-line"><input id="directoryQzonePostEnabled" type="checkbox" ${settings.post_enabled?'checked':''}>启用自动发布</label><label>每几天发布<input id="directoryQzonePeriodDays" type="number" min="1" max="31" value="${Number(settings.period_days||1)}"></label><label>每周期最多几条<input id="directoryQzonePostsPerPeriod" type="number" min="1" max="20" value="${Number(settings.posts_per_period||2)}"></label><label>开始时间<input id="directoryQzoneStartHour" type="number" min="0" max="23" value="${Number.isFinite(Number(settings.post_start_hour))?Number(settings.post_start_hour):9}"></label><label>结束时间<input id="directoryQzoneEndHour" type="number" min="1" max="24" value="${Number.isFinite(Number(settings.post_end_hour))?Number(settings.post_end_hour):23}"></label></div><label class="switch-line"><input id="directoryQzonePostAutoGenerate" type="checkbox" ${settings.post_auto_generate?'checked':''}>到点由模型生成正文并发布</label><textarea id="directoryQzonePostPrompt" class="qzone-comment" maxlength="2000" placeholder="生活趣事、思考感悟、原作剧情、热点观点等主题会按日期轮换">${escapeHtml(settings.post_prompt || '根据当前记忆和情绪，写一条自然、简短、带一点亚托莉口吻的 QQ 空间动态。')}</textarea><div class="row"><button onclick="saveDirectoryAtriPublisher(this)">保存发布设置</button><button class="ghost" onclick="publishDirectoryAtriPost(this)">立即生成并发布</button></div></div>`;
-}
-const DEVLOG_TYPE_LABELS = {feat:'新增', fix:'修复', perf:'优化', refactor:'重构', docs:'文档', test:'测试', chore:'杂项', other:'其他'};
-function userDirectoryDevlogMarkup() {
-  const devlog = window._qzoneAutomation?.devlog;
-  if(!devlog || devlog.ok === false) return `<div class="memory-meta">开发日志状态尚未读取；刷新用户目录后展示。</div>`;
-  const settings = devlog.settings || {};
-  const pending = Array.isArray(devlog.pending) ? devlog.pending : [];
-  const posts = Array.isArray(devlog.posts) ? devlog.posts : [];
-  const draft = devlog.draft;
-  const cap = Number.isFinite(Number(settings.devlog_daily_cap)) ? Number(settings.devlog_daily_cap) : 2;
-  const types = Array.isArray(settings.devlog_visibility_types) ? settings.devlog_visibility_types.join(',') : String(settings.devlog_visibility_types||'');
-  const pendingMarkup = pending.length ? pending.slice(0,10).map(row=>`<div class="devlog-commit-row"><span class="badge">${escapeHtml(DEVLOG_TYPE_LABELS[row.commit_type]||row.commit_type||'其他')}</span><span>${escapeHtml(row.subject||'(无标题提交)')}</span></div>`).join('') + (pending.length>10?`<div class="memory-meta">另有 ${pending.length-10} 条待写提交。</div>`:'') : '<div class="memory-meta">没有待写进手记的提交。</div>';
-  const draftMarkup = draft ? `<textarea id="directoryDevlogDraftContent" class="qzone-comment" maxlength="1000">${escapeHtml(draft.content||'')}</textarea><div class="row"><button class="ghost" onclick="devlogSaveDraft(this,${Number(draft.id)})">保存草稿</button><button onclick="devlogPublishNow(this,${Number(draft.id)})">立即发布</button><button class="ghost" onclick="devlogRegenerate(this)">重新生成</button><button class="ghost" onclick="devlogDeleteDraft(this,${Number(draft.id)})">删除</button></div>${draft.last_error?`<div class="memory-meta">上次失败原因：${escapeHtml(draft.last_error)}</div>`:''}` : (pending.length ? '<div class="memory-meta">还没有草稿；点击「立即生成」由模型起草，或等自动周期生成。</div>' : '<div class="memory-meta">没有待写提交时不会生成手记。</div>');
-  const postsMarkup = posts.length ? `<div class="atri-pool">${posts.map(row=>`<article class="atri-pool-item"><div class="pool-head"><span class="badge ${row.status==='published'?'active':'red'}">${row.status==='published'?'已发布':(row.status==='failed'?'发布失败':(row.status==='publishing'?'发布中':'草稿'))}</span><span class="memory-meta">${row.published_at?qzoneDate(row.published_at):''}</span></div><div class="pool-content">${escapeHtml(row.content||'')}</div>${row.tid?`<div class="memory-meta">tid ${escapeHtml(row.tid)}</div>`:''}${row.last_error?`<div class="memory-meta">原因：${escapeHtml(row.last_error)}</div>`:''}${row.status!=='published'&&row.status!=='publishing'?`<div class="row"><button class="ghost" onclick="devlogDeleteDraft(this,${Number(row.id)})">删除</button></div>`:''}</article>`).join('')}</div>` : '<div class="memory-meta">还没有发布过开发手记。</div>';
-  return `<div class="qzone-auto-switches"><strong>开发日志</strong><label><input id="directoryDevlogEnabled" type="checkbox" ${settings.devlog_enabled?'checked':''}>启用采集</label><label><input id="directoryDevlogAutoPublish" type="checkbox" ${settings.devlog_auto_publish?'checked':''}>自动发布</label><span class="memory-meta">今日已发布 ${Number(devlog.published_today||0)} / 上限 ${cap}</span></div><div class="form-grid qzone-form-grid"><label>每日上限（0-10，0 为停发）<input id="directoryDevlogDailyCap" type="number" min="0" max="10" value="${cap}"></label><label>可见提交类型<input id="directoryDevlogTypes" value="${escapeHtml(types)}" placeholder="feat,fix,perf,refactor"></label></div><div class="row"><button class="ghost" onclick="saveDirectoryDevlogSettings(this)">保存开发日志设置</button><button class="ghost" onclick="devlogScanNow(this)">立即采集</button>${(!draft && pending.length)?'<button class="ghost" onclick="devlogGenerateNow(this)">立即生成</button>':''}</div><details open><summary>待写提交（${pending.length} 条）</summary>${pendingMarkup}</details><details ${draft?'open':''}><summary>当前草稿</summary>${draftMarkup}</details><details><summary>历史手记（${posts.length} 条）</summary>${postsMarkup}</details><div class="memory-meta">上次采集：${Number(settings.devlog_last_scan_at)?qzoneDate(settings.devlog_last_scan_at):'尚未采集'} · 手记只依据提交记录生成，采集或生成失败时会明确说明，不会编造内容。</div>`;
-}
 function userDirectoryDetailMarkup(item) {
   if(item.entity_type === 'group') {
     return `<div class="user-directory-inline-detail">${userDirectoryGroupSummaryMarkup(item)}</div>`;
@@ -237,10 +104,9 @@ function userDirectoryDetailMarkup(item) {
   const roles = item.roles || [];
   const modalityPolicy = window._modalityAccess?.policy?.users?.[String(item.user_id)] || {};
   const memory = userDirectoryMemory(item);
-  const atriMarkup = roles.includes('bot') ? userDirectoryAtriPublisherMarkup() : '';
   const modalityMarkup = roles.includes('bot') ? '' : `<div class="row"><label class="switch-line"><input class="user-directory-vision" type="checkbox" ${modalityPolicy.vision?'checked':''}>视觉模型</label><label class="switch-line"><input class="user-directory-voice" type="checkbox" ${modalityPolicy.voice?'checked':''}>语音模型</label><button class="ghost" onclick="saveUserDirectoryModality(this,'user:${escapeHtml(item.user_id)}')">保存权限</button></div>`;
   const memoryAction = memory ? `<div class="row"><button class="ghost" onclick="openMemory('${escapeHtml(memory.id)}')">编辑记忆</button></div>` : '';
-  return `<div class="user-directory-inline-detail">${memoryAction}${modalityMarkup}${userDirectoryInlineFeedMarkup(item)}${atriMarkup}</div>`;
+  return `<div class="user-directory-inline-detail">${memoryAction}${modalityMarkup}</div>`;
 }
 function renderUserDirectory() {
   const state = window._userDirectory || {items:[],groups:[]};
@@ -275,23 +141,19 @@ function renderUserDirectory() {
     const key = userDirectoryEntityKey(item); const selected = (state.selectedIds || []).includes(key);
     const isGroup = item.entity_type === 'group'; const roles = item.roles || [];
     const roleLabel = roles.includes('bot') ? '机器人' : (roles.includes('owner') ? '所有者' : '');
-    const special = roles.includes('bot') ? userDirectoryBadge('自动发布','active') : '';
     const title = isGroup ? `群聊 · ${item.canonical_name}` : item.canonical_name;
     const rowClass = `${isGroup?'group-row':''} ${roles.includes('bot')?'bot-row':''} ${roles.includes('owner')?'owner-row':''}`;
-    // 亚托莉不是普通用户档案：主卡只显示运行身份、消息和最近活动，
-    // 专属发布/互动能力在展开详情中呈现。
+    // 亚托莉不是普通用户档案：主卡只显示运行身份、消息和最近活动。
     const cardContext = isGroup ? userDirectoryGroupSummaryCompactMarkup(item) : (roles.includes('bot') ? '' : userDirectoryMemoryCardMarkup(item));
-    const activity=item.last_seen_at || (roles.includes('bot') ? userDirectoryFeed(item)?.abstime : '');
-    return `<div class="user-directory-entry"><button type="button" class="user-directory-row ${selected?'selected':''} ${rowClass}" onclick="selectUserDirectoryUser('${escapeHtml(key)}')"><strong>${escapeHtml(title)} ${roleLabel?userDirectoryBadge(roleLabel,'active'):''} ${special}</strong><span class="memory-meta">${isGroup?'群号 '+escapeHtml(item.group_id):'QQ '+escapeHtml(item.user_id)} · ${Number(item.message_count||0)} 条消息${activity ? ' · 最近 '+escapeHtml(userDirectoryTimeText(activity)) : ''}</span>${cardContext}</button>${selected ? userDirectoryDetailMarkup(item) : ''}</div>`;
+    const activity=item.last_seen_at || '';
+    return `<div class="user-directory-entry"><button type="button" class="user-directory-row ${selected?'selected':''} ${rowClass}" onclick="selectUserDirectoryUser('${escapeHtml(key)}')"><strong>${escapeHtml(title)} ${roleLabel?userDirectoryBadge(roleLabel,'active'):''}</strong><span class="memory-meta">${isGroup?'群号 '+escapeHtml(item.group_id):'QQ '+escapeHtml(item.user_id)} · ${Number(item.message_count||0)} 条消息${activity ? ' · 最近 '+escapeHtml(userDirectoryTimeText(activity)) : ''}</span>${cardContext}</button>${selected ? userDirectoryDetailMarkup(item) : ''}</div>`;
   };
   const target = $('userDirectoryRows');
   if(!target) return;
   const html = [sortedUsers.length ? `<div class="user-directory-section-title">用户（${sortedUsers.length}）</div>${sortedUsers.map(card).join('')}` : '', groups.length ? `<div class="user-directory-section-title">群聊（${groups.length}）</div>${groups.map(card).join('')}` : ''].join('');
   target.innerHTML = html || '<div class="empty">没有匹配的用户或群聊。</div>';
   const status = state.sourceStatus || {};
-  const qzoneStatus = status.qzone || '未刷新';
-  const qzoneDetail = window._directoryQzoneFeedError ? `（${window._directoryQzoneFeedError.slice(0,120)}）` : '';
-   if($('userDirectoryStatus')) $('userDirectoryStatus').textContent = `用户 ${users.length}/${Number(state.total || state.items?.length || 0)} · 群聊 ${groups.length}/${Number(state.groupTotal || state.groups?.length || 0)} · 记忆 ${status.memory || '—'} · 摘要 ${status.insights || '—'} · QQ好友 ${qzoneStatus}${qzoneDetail}`;
+  if($('userDirectoryStatus')) $('userDirectoryStatus').textContent = `用户 ${users.length}/${Number(state.total || state.items?.length || 0)} · 群聊 ${groups.length}/${Number(state.groupTotal || state.groups?.length || 0)} · 记忆 ${status.memory || '—'} · 摘要 ${status.insights || '—'}`;
 }
 function userDirectoryOpenTab(id) {
   const button = Array.from(document.querySelectorAll('.tab')).find(item => item.getAttribute('onclick') === `showTab(event,'${id}')`);
@@ -339,7 +201,7 @@ async function saveUserDirectoryModalityCore(button, entityKey) {
     toast(`${isGroup?'群聊':'用户'}视觉 / 语音权限已保存`);
   } catch(error) { toast('权限保存失败：'+error.message); }
 }
-async function loadUserDirectory(syncQZone=false) {
+async function loadUserDirectory() {
   const target = $('userDirectoryRows');
   if(target && !window._userDirectory?.items?.length) {
     // 上一次成功读取的核心目录先用于首屏，网络慢时不再让整个用户中心空白。
@@ -351,23 +213,12 @@ async function loadUserDirectory(syncQZone=false) {
       } else target.innerHTML = '<div class="empty">正在读取...</div>';
     } catch(error) { target.innerHTML = '<div class="empty">正在读取...</div>'; }
   }
-  if(!window._qzoneLatestFeeds?.length) {
-    try {
-      const cachedFeeds=JSON.parse(localStorage.getItem('atri.qzone.latestFeeds') || '[]');
-      if(Array.isArray(cachedFeeds) && cachedFeeds.length) window._qzoneLatestFeeds=cachedFeeds;
-    } catch(error) { /* private mode/storage quota */ }
-  }
   try {
-    loadDirectoryQZoneLoginStatus();
     const data = await api('/api/users?limit=1000');
-    const previousQzoneStatus=window._userDirectory?.sourceStatus?.qzone;
     const sourceStatus={...(data.source_status||{})};
-    if(['ready','partial'].includes(previousQzoneStatus) && sourceStatus.qzone==='not_refreshed') sourceStatus.qzone=previousQzoneStatus;
     window._userDirectory = {items:data.items || [], groups:data.groups || [], total:Number(data.total||0), groupTotal:Number(data.group_total||data.groups?.length||0), selectedIds:Array.isArray(window._userDirectory?.selectedIds) ? window._userDirectory.selectedIds : [], sourceStatus};
     try { localStorage.setItem('atri.userDirectory.core', JSON.stringify(window._userDirectory)); } catch(error) { /* private mode/storage quota */ }
-    if(syncQZone) {
-      await refreshDirectoryQZoneData();
-    }
+    await loadDirectorySchedules();
     renderUserDirectory();
   } catch(error) {
     if($('userDirectoryStatus')) $('userDirectoryStatus').textContent = '用户目录读取失败：' + error.message;
@@ -375,7 +226,7 @@ async function loadUserDirectory(syncQZone=false) {
   }
 }
 async function runUserDirectoryRefresh(button) {
-  await withButtonBusy(button, async()=>{ await loadUserDirectory(true); toast('用户目录已刷新'); }, '刷新中…');
+  await withButtonBusy(button, async()=>{ await loadUserDirectory(); toast('用户目录已刷新'); }, '刷新中…');
 }
-function openUserInDirectory(userId) {
+async function openUserInDirectory(userId) {
 """

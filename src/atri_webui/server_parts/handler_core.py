@@ -97,26 +97,6 @@ class HandlerCoreMixin:
                     self.webui_state.memory_admin.detail(parsed.query), names
                 )
             )
-        if parsed.path == "/api/qzone":
-            return self._handle_qzone_dashboard()
-        if parsed.path == "/api/qzone/feeds":
-            return self._handle_qzone_feeds(parsed.query)
-        if parsed.path == "/api/qzone/feeds/all":
-            return self._handle_qzone_all_feeds(parsed.query)
-        if parsed.path == "/api/qzone/login-status":
-            return self._handle_qzone_login_status()
-        if parsed.path == "/api/qzone/friends":
-            return self._handle_qzone_friends()
-        if parsed.path == "/api/qzone/automation":
-            payload = self.webui_state.qzone_automation.dashboard()
-            payload["bot_qq"] = str(self.webui_state.config.bot_qq)
-            payload["owner_qqs"] = [str(value) for value in (self.webui_state.config.owner_qqs or ())]
-            return self._send_json(payload)
-        if parsed.path == "/api/qzone/automation/logs":
-            params = parse_qs(parsed.query)
-            return self._send_json({"ok": True, "logs": self.webui_state.qzone_automation.store.logs(int(params.get("limit", [100])[0] or 100), str(params.get("action", [""])[0]))})
-        if parsed.path == "/api/qzone/automation/devlog":
-            return self._handle_qzone_automation_devlog()
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_POST(self) -> None:
@@ -198,48 +178,6 @@ class HandlerCoreMixin:
         if parsed.path == "/api/memory/backup":
             backup = self.webui_state.memory_admin.backup("manual")
             return self._send_json({"ok": True, "backup": str(backup)})
-        if parsed.path == "/api/qzone/like":
-            return self._handle_qzone_like()
-        if parsed.path == "/api/qzone/comment":
-            return self._handle_qzone_comment()
-        if parsed.path == "/api/qzone/login":
-            return self._handle_qzone_login()
-        if parsed.path == "/api/qzone/automation/settings":
-            return self._handle_qzone_automation_settings()
-        if parsed.path == "/api/qzone/automation/content":
-            return self._handle_qzone_automation_content()
-        if parsed.path == "/api/qzone/automation/content/update":
-            return self._handle_qzone_automation_content_update()
-        if parsed.path == "/api/qzone/automation/content/delete":
-            return self._handle_qzone_automation_content_delete()
-        if parsed.path == "/api/qzone/automation/targets":
-            return self._handle_qzone_automation_targets()
-        if parsed.path == "/api/qzone/automation/run":
-            return self._handle_qzone_automation_run()
-        if parsed.path == "/api/qzone/automation/publish-generated":
-            return self._handle_qzone_automation_publish_generated()
-        if parsed.path == "/api/qzone/automation/prepare-next":
-            return self._handle_qzone_automation_prepare_next()
-        if parsed.path == "/api/qzone/automation/publish":
-            return self._handle_qzone_automation_publish()
-        if parsed.path == "/api/qzone/automation/generate":
-            return self._handle_qzone_automation_generate()
-        if parsed.path == "/api/qzone/automation/comment":
-            return self._handle_qzone_automation_comment()
-        if parsed.path == "/api/qzone/automation/comment/update":
-            return self._handle_qzone_automation_comment_update()
-        if parsed.path == "/api/qzone/automation/comment/delete":
-            return self._handle_qzone_automation_comment_delete()
-        if parsed.path == "/api/qzone/automation/devlog/scan":
-            return self._handle_qzone_automation_devlog_scan()
-        if parsed.path == "/api/qzone/automation/devlog/generate":
-            return self._handle_qzone_automation_devlog_generate()
-        if parsed.path == "/api/qzone/automation/devlog/draft":
-            return self._handle_qzone_automation_devlog_draft()
-        if parsed.path == "/api/qzone/automation/devlog/publish":
-            return self._handle_qzone_automation_devlog_publish()
-        if parsed.path == "/api/qzone/automation/devlog/delete":
-            return self._handle_qzone_automation_devlog_delete()
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
 

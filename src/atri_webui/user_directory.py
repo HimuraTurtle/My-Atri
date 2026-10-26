@@ -1,6 +1,6 @@
 """Unified read model for QQ users shown across the WebUI.
 
-The directory deliberately owns identity aggregation only.  Memory, QZone,
+The directory deliberately owns identity aggregation only.  Memory,
 Insights, and modality modules remain the source of truth for their own
 mutations; this module gives the UI one stable identity and overview shape.
 """
@@ -25,7 +25,7 @@ def _number(value: Any, default: float = 0.0) -> float:
 
 def _timestamp(value: Any) -> float:
     raw = _number(value)
-    # Insights stores ISO timestamps while memory and QZone use epoch seconds.
+    # Insights stores ISO timestamps while memory uses epoch seconds.
     if raw:
         return raw / 1000 if raw > 100_000_000_000 else raw
     text = _text(value)
@@ -119,9 +119,6 @@ class _UserAccumulator:
         contexts = sorted(self.contexts)
         capabilities = {
             "memory": "memory" in self.sources,
-            "qzone": "qzone" in self.sources or "qzone_target" in self.sources,
-            "like": bool(self.capabilities.get("like", False)),
-            "comment": bool(self.capabilities.get("comment", False)),
             "vision": bool(self.capabilities.get("vision", False)),
             "voice": bool(self.capabilities.get("voice", False)),
         }
@@ -214,8 +211,6 @@ class UserDirectory:
         memory_payload: dict[str, Any] | None = None,
         insights_users: Iterable[dict[str, Any]] = (),
         modality_policy: dict[str, Any] | None = None,
-        qzone_targets: Iterable[dict[str, Any]] = (),
-        qzone_friends: Iterable[dict[str, Any]] = (),
         insights_groups: Iterable[dict[str, Any]] = (),
         bot_qq: Any = "",
         owner_qqs: Iterable[Any] = (),
@@ -229,7 +224,6 @@ class UserDirectory:
         self._ingest_memory(memory_payload or {})
         self._ingest_insights(insights_users)
         self._ingest_insights_groups(insights_groups)
-        self._ingest_qzone(qzone_friends, qzone_targets)
         self._ingest_modality(modality_policy or {})
         for user_id in [self.bot_qq, *self.owner_qqs]:
             if user_id.isdigit():
@@ -334,40 +328,6 @@ class UserDirectory:
                 source="insights",
                 messages=item.get("messages"),
                 last_seen_at=item.get("last_message_at"),
-            )
-
-    def _ingest_qzone(
-        self,
-        friends: Iterable[dict[str, Any]],
-        targets: Iterable[dict[str, Any]],
-    ) -> None:
-        status = {"qzone": self.source_status.get("qzone", "unknown")}
-        for item in friends:
-            if not isinstance(item, dict):
-                continue
-            user_id = _text(item.get("user_id") or item.get("uin"))
-            if not user_id.isdigit():
-                continue
-            self._user(user_id).observe(
-                name=item.get("nickname") or item.get("name"),
-                aliases=[item.get("remark"), item.get("card")],
-                source="qzone",
-                context="qzone",
-                avatar=item.get("avatar"),
-                source_status=status,
-            )
-        for item in targets:
-            if not isinstance(item, dict):
-                continue
-            user_id = _text(item.get("user_id"))
-            if not user_id.isdigit():
-                continue
-            self._user(user_id).observe(
-                name=item.get("nickname"),
-                source="qzone_target",
-                context="qzone",
-                capabilities={"like": item.get("enabled_like"), "comment": item.get("enabled_comment")},
-                source_status=status,
             )
 
     def _ingest_modality(self, policy: dict[str, Any]) -> None:

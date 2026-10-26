@@ -12,8 +12,8 @@
 - `src/atri_qq_bot/` — 机器人主服务：OneBot 接入、人格与记忆、认知内核、工具箱与各能力模块
 - `src/atri_webui/` — 本机管理面板（WebUI）与 HTTP API
 - `src/atri_desktop/` — Windows 桌宠（托盘图标与启动菜单）
-- `plugins/qqzone/` — QQ 空间动态插件
-- `tests/` — 全量回归测试（47 个测试文件）
+- `src/atri_qq_bot/qzone/` — QQ 空间模块（说说/点赞/评论与开发日志闭环）
+- `tests/` — 全量回归测试（45 个测试文件）
 - `docs/prompts/` — 运行时提示词，由代码 `load_prompt` 加载，改名需同步代码
 - `docs/learning/` — 项目讲解与课程材料
 - `docs/research/` — 原作考据与人设档案
@@ -149,8 +149,8 @@ ConversationTurn
 #### 7. QQ 空间扩展
 
 - **v0.3**：没有项目内 QQ 空间扩展边界。
-- **v0.4**：新增 `plugins/qqzone/`、`qzone_admin.py` 和 `qzone_automation/`，通过本机 Bridge 执行，默认关闭。
-- **优化结果**：Cookie 只保留在 Bridge；点赞和评论保留人工确认边界。
+- **v0.4**：曾以 `plugins/qqzone/`、`qzone_admin.py` 和 `qzone_automation/` 通过本机 Bridge 执行。
+- **优化结果**：现为 `atri_qq_bot/qzone/` 会话复用版——Cookie 经 OneBot `get_cookies` 从 NapCat 按需借取，无独立登录与常驻保活；发说说仅限主人「发条说说」口令，「更新日志」口令触发开发手记闭环；点赞与评论仅主人私聊可用。
 
 #### 8. 音乐与资源治理
 
@@ -174,11 +174,11 @@ ConversationTurn
 
 1. 从桌宠菜单选择“启动亚托莉”，或运行 `tools\launch\qq_legacy\start-with-qq.vbs`。
 2. 启动器先让 ATRI 监听 OneBot，再用独立隐藏进程恢复项目专用 NapCat/QQ。
-3. QQ 空间 Bridge 和 MaiBot 属于可选模块，会在聊天核心之后错峰启动；Ollama 与语音服务按真实请求启动。
+3. Ollama 与语音服务按真实请求启动；QQ 空间不启动任何外部进程，Cookie 通过 NapCat 按需借取。
 4. 如果 NapCat 掉线或 QQ 登录失效，请打开 NapCat WebUI 手动扫码登录；项目不会自动弹出二维码。
 5. 用另一个 QQ 给机器人账号发送私聊消息测试。
 
-第一次安装或需要重建 `.venv` 时运行 `tools\launch\atri\start-atri.bat`。正常启动不再执行依赖安装，也不会绕过统一启动器。若 `.env` 中 `QZONE_BRIDGE_ENABLED=true`，可选启动模式会检查并复用本机 QQ 空间 Bridge（5700 端口）。
+第一次安装或需要重建 `.venv` 时运行 `tools\launch\atri\start-atri.bat`。正常启动不再执行依赖安装，也不会绕过统一启动器。
 
 停止机器人：
 
@@ -212,7 +212,7 @@ NapCat 的 OneBot 反向 WebSocket 已经自动配置为：`ws://127.0.0.1:8765/
 - **持续认知**：`cognition/` 使用 LangGraph `StateGraph` 建立“理解 → 能力提案”的显式拓扑；`CognitionKernel` 更新目标、情绪、自我经历、当前思考和未解决问题，SQLite/WAL 负责持久化。当前为 shadow mode，不直接产生副作用。
 - **回复评测**：`insights/evaluation.py` 通过后台 worker 评估相关性、准确性、完整性、连贯性、忠实性和幻觉风险；支持复用当前聊天模型，也支持独立评测模型。
 - **群聊总结**：归档群消息后使用 `jieba`/规则预处理、主题聚类和 LLM 总结，支持最近 24 小时、7 天或自然月的日报/周报/月报，并在 WebUI 展示报告。
-- **QQ 空间**：`plugins/qqzone/` 和 `qzone_automation/` 对接本机 Bridge，支持动态读取、人工确认的点赞/评论及可选自动化规则；Cookie 不进入项目配置。
+- **QQ 空间**：`atri_qq_bot/qzone/` 会话复用版，主人私聊口令「发条说说」「更新日志」与自然语言 qzone_* 工具覆盖发布、点赞、评论与开发手记闭环；Cookie 从 NapCat 按需借取，不进入项目配置。
 - **音乐工作流**：`music/library.py` 管理完整歌曲目录和 QQ 点歌匹配，`music/session.py` 管理上传、工程阶段、版本和产物；WebUI 支持人声分离、分段、推理、混音和恢复。
 - **模块化 WebUI**：原集中页面拆为 `page/body_*`、`page/script_*`，服务端拆为 `server_parts/handler_*`，新增评测、群总结、QQ 空间、用户目录和音乐管理页面。
 
@@ -289,29 +289,20 @@ ws://127.0.0.1:8765/onebot
 
 然后用另一个 QQ 给机器人 QQ 发私聊消息，应该能收到亚托莉风格回复。
 
-### WebUI QQ 动态
+### QQ 空间（会话复用版）
 
-“QQ动态”页使用独立的 `onebot-qzone` 本机 Bridge 读取 QQ 空间。先按该项目说明完成登录并启动 Bridge，再在本项目 `.env` 设置：
+QQ 空间功能不独立登录、不常驻保活：Cookie 通过 OneBot `get_cookies(domain="user.qzone.qq.com")` 从 NapCat 按需借取，完全复用 NapCat 的唯一登录会话，流量只在实际使用时产生。在 `.env` 设置 `QZONE_ENABLED=true` 并重启亚托莉即可开启。
 
-```env
-QZONE_BRIDGE_ENABLED=true
-QZONE_BRIDGE_URL=http://127.0.0.1:5700
-QZONE_BRIDGE_TOKEN=与Bridge一致的AccessToken
-```
+**主人私聊口令**（确定性拦截，仅主人可用，不需要 @）：
 
-重启亚托莉后打开 WebUI → QQ动态。也可以进入 WebUI → 测试 → 开发者状态与访问入口，点击“QQ动态 WebUI”直达该页面；下拉列表只显示记忆面板中的人物 QQ，点赞和评论均需在页面人工确认。QQ 空间 Cookie 只应保存在 Bridge 中，不要写入本项目。
+- 「发条说说」——发布一条说说。带正文（如「发条说说：今天试了新闹钟」）直接发布原文；不带正文时按当日主题轮换由模型生成，生成稿必须通过质量闸（反编造、反套话、排重、称呼禁令）才发布。
+- 「更新日志」——执行一遍开发日志闭环：采集新提交 → 生成亚托莉口吻的开发手记 → 发布到 QQ 空间。
 
-### 开发日志（ATRI 开发手记）
+**自然语言工具**（`QZONE_AI_TOOLS_ENABLED=true`）：聊天中可直接说「看看好友动态」「帮我点赞/评论某某的动态」，点赞与评论仅主人在私聊会话中可用；重复点赞、重复评论由动作日志幂等拦截。
 
-`qzone_automation/devlog` 会把本仓库的代码提交转写成亚托莉口吻的开发手记，发布到机器人自己的 QQ 空间。在 WebUI → 用户中心 → 亚托莉卡片的「开发日志」区块开启「启用采集」即可，默认关闭。
+**自动评论**：每天在锚点时间（默认 23:30 ± 10 分钟抖动）随机执行一轮，拉取好友动态、跳过自己和已评论过的，由模型生成评论；`QZONE_AUTO_COMMENT_*` 可调锚点、抖动与条数。聊天中另有小概率（默认 0.001）随机触发一条好友动态评论，带冷却防连发。
 
-- **采集**：每 10 分钟读取水位之后的新提交（`git log`），首次开启只初始化水位，不会把历史提交一次性广播出去。
-- **三道安全闸**：只有 `devlog_visibility_types`（默认 `feat/fix/perf/refactor`）类型的提交进入手记；标题包含链接、文件路径、密钥、邮箱等敏感信息的提交直接跳过；每天最多发布 `devlog_daily_cap` 篇（默认 2，0 为停发）。
-- **生成与降级**：手记由 `generate_qzone_text` 用 ATRI 口吻提示词从提交记录生成，提示词内建反编造约束与称呼禁令（正文不得出现「主人」等称呼）；生成失败或正文未过检查（过短、过长、含敏感信息）时保留待写提交、退避重试，绝不编造“今天没有更新”一类的填充内容。
-- **幂等发布**：草稿 → publishing → published 的状态机由 SQLite 原子更新保证，多个进程不会重复发布；发布超时视为“可能已发出”的不确定态，放弃自动重发以免重复刷屏。
-- **手动操作**：面板支持立即采集、立即生成、编辑草稿、重新生成、手动发布与删除；手动发布同样受每日上限与幂等状态机约束。
-
-相关接口：`GET /api/qzone/automation/devlog`、`POST /api/qzone/automation/devlog/{scan,generate,draft,publish,delete}`；配置项随 `/api/qzone/automation/settings` 一起保存。
+**开发日志安全闸**：只有 `QZONE_DEVLOG_VISIBILITY_TYPES`（默认 feat/fix/perf/refactor）类型的提交进入手记；标题含链接、文件路径、密钥、邮箱的提交直接跳过；每天最多 `QZONE_DEVLOG_DAILY_CAP` 篇（默认 2）。首次开启只初始化水位，不会把历史提交一次性广播；草稿 → publishing → published 状态机由 SQLite 原子更新保证幂等，发布超时按"可能已发出"处理、放弃自动重发。数据沿用 `data/qzone_automation.sqlite3`，旧版本升级无需迁移。
 
 ## Windows 双端部署（Docker 聊天 + 宿主机语音）
 

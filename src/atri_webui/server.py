@@ -2,32 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import os
-import threading
 import time
-from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import Any
 
 from atri_qq_bot.config import BotConfig, load_config
-from atri_qq_bot.llm_tools.web_search_tool import search_web
-from atri_qq_bot.runtime import PROJECT_ROOT
 
 from .evaluation_handlers import EvaluationHandlersMixin
 from .memory_admin import memory_admin_for_config
-from .qzone_admin import QZoneAdmin
-from .qzone_automation import (
-    QZoneAutomation,
-    QZoneAutomationStore,
-    sanitize_qzone_fact_context,
-    topic_for_schedule,
-)
-from .server_parts.shared import (
-    LOGGER,
-    generate_qzone_text,
-    run_coro,
-)
+from .server_parts.shared import LOGGER
 from .server_parts.shared import bind_loop, test_chat  # 再导出：onebot 与测试从本模块取用
 
 # WebUI 是本地运维面板，不承载对话主循环。API 管理配置、记忆、日志和音频资源；
@@ -42,33 +25,6 @@ class WebUIState:
         self.group_name_lock = asyncio.Lock()
         self._group_name_refresh_at = 0.0
         self.memory_admin = memory_admin_for_config(config)
-        configured_database = Path(
-            os.getenv("QZONE_AUTOMATION_DB", "data/qzone_automation.sqlite3")
-        )
-        database = (
-            configured_database
-            if configured_database.is_absolute()
-            else PROJECT_ROOT / configured_database
-        )
-        self.qzone_automation = QZoneAutomation(
-            QZoneAutomationStore(database),
-            lambda: QZoneAdmin(
-                self.memory_admin.summary(),
-                bot_qq=self.config.bot_qq,
-                owner_qqs=self.config.owner_qqs,
-            ),
-            lambda prompt, profile_id: run_coro(generate_qzone_text(self.config, prompt, "post", profile_id)),
-            lambda prompt, profile_id: run_coro(generate_qzone_text(self.config, prompt, "comment", profile_id)),
-            lambda settings, scheduled_at, slot_index=None: qzone_fact_context(
-                self.config,
-                settings,
-                scheduled_at,
-                slot_index,
-            ),
-        )
-        self.qzone_login_lock = threading.Lock()
-        self.qzone_login_running = False
-        self.qzone_login_last: dict[str, Any] = {"ok": None, "message": ""}
 
     async def refresh_group_names(self, force: bool = False) -> dict[str, str]:
         """定期从 NapCat 同步群名，WebUI 断线时保留 SQLite 中的缓存。"""
@@ -167,8 +123,6 @@ async def start_webui(config: BotConfig, onebot_server: Any) -> Any | None:
         return None
     task = asyncio.create_task(asyncio.to_thread(httpd.serve_forever))
     httpd._atri_task = task  # type: ignore[attr-defined]
-    httpd._atri_webui_state = state  # type: ignore[attr-defined]
-    state.qzone_automation.start()
     LOGGER.info("WebUI 已监听 http://%s:%s", host, port)
     return httpd
 
@@ -176,9 +130,6 @@ async def start_webui(config: BotConfig, onebot_server: Any) -> Any | None:
 async def stop_webui(httpd: Any | None) -> None:
     if httpd is None:
         return
-    state = getattr(httpd, "_atri_webui_state", None)
-    if state is not None:
-        await state.qzone_automation.stop()
     httpd.shutdown()
     task = getattr(httpd, "_atri_task", None)
     if task is not None:
@@ -196,7 +147,6 @@ from .server_parts.handler_config import HandlerConfigMixin
 from .server_parts.handler_core import HandlerCoreMixin
 from .server_parts.handler_insights import HandlerInsightsMixin
 from .server_parts.handler_music import HandlerMusicMixin
-from .server_parts.handler_qzone import HandlerQZoneMixin
 from .server_parts.handler_response import HandlerResponseMixin
 from .server_parts.handler_stickers_memory import HandlerStickersMemoryMixin
 
@@ -207,37 +157,8 @@ class AtriWebUIHandler(
     HandlerMusicMixin,
     HandlerInsightsMixin,
     HandlerStickersMemoryMixin,
-    HandlerQZoneMixin,
     HandlerResponseMixin,
     EvaluationHandlersMixin,
     BaseHTTPRequestHandler,
 ):
     webui_state: WebUIState
-
-
-def qzone_fact_context(
-    config: BotConfig,
-    settings: dict[str, Any],
-    scheduled_at: float,
-    slot_index: int | None = None,
-) -> str:
-    """Fetch recent evidence, then discard stale or low-attribution search results."""
-    topic = topic_for_schedule(settings, scheduled_at, slot_index)
-    query = f"{topic} 最新消息 {datetime.fromtimestamp(float(scheduled_at)).strftime('%Y-%m-%d')}"
-    research_topic = any(marker in topic for marker in ("前沿", "科普", "技术", "科学", "研究"))
-    trusted_domains = ["cas.cn", "arxiv.org", "nature.com"] if research_topic else ["gov.cn", "news.cn", "people.com.cn"]
-    raw = str(
-        run_coro(
-            search_web(
-                {
-                    "query": query,
-                    "mode": "news",
-                    "domains": trusted_domains,
-                    "max_results": 5,
-                },
-                config,
-            )
-        )
-        or ""
-    ).strip()
-    return sanitize_qzone_fact_context(raw, scheduled_at)

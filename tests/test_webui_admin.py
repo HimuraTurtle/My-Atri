@@ -77,8 +77,8 @@ def test_user_directory_page_loads_memory_immediately_and_does_not_rerender_per_
 
 def test_user_directory_can_return_more_than_five_hundred_users() -> None:
     directory = UserDirectory(
-        qzone_friends=[
-            {"user_id": str(1000000000 + index), "nickname": f"用户 {index}"}
+        insights_users=[
+            {"user_id": str(1000000000 + index), "name": f"用户 {index}"}
             for index in range(566)
         ]
     )
