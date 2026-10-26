@@ -243,7 +243,7 @@ class BotConfig:
     # 每轮自动评论的好友动态条数上限。
     qzone_auto_comment_max: int = 2
     # 聊天随机触发评论：每条参与会话的消息按此概率在后台评论一条好友动态。
-    qzone_random_comment_probability: float = 0.001
+    qzone_random_comment_probability: float = 0.0005
     # 两次随机触发之间的最小间隔（分钟），防连发。
     qzone_random_comment_cooldown_minutes: int = 30
     # 开发日志闭环：「更新日志」主人口令触发；提交白名单 + 每日上限。

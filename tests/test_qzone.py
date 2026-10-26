@@ -41,7 +41,7 @@ def _config(**overrides):
         "qzone_auto_comment_time": "23:30",
         "qzone_auto_comment_jitter_minutes": 10,
         "qzone_auto_comment_max": 2,
-        "qzone_random_comment_probability": 0.001,
+        "qzone_random_comment_probability": 0.0005,
         "qzone_random_comment_cooldown_minutes": 30,
         "qzone_devlog_enabled": True,
         "qzone_devlog_auto_publish": True,
