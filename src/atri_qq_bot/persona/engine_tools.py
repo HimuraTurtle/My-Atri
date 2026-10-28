@@ -66,6 +66,34 @@ class EngineToolsMixin(PersonaEngineMixin):
                 int(getattr(receipt, "elapsed_ms", 0) or 0),
             )
 
+    async def _proactive_search_for_turn(
+        self, conversation_id: str, user_text: str
+    ) -> str | None:
+        """本轮主动联网检索，带回注入用的证据文本。
+
+        同一轮回复会经历质量重试与矛盾重写等多个模型请求；备忘录保证
+        相同消息只在 TTL 内真正搜索一次，其余阶段直接复用证据。
+        """
+        memo = getattr(self, "_proactive_search_memo", None)
+        if memo is None:
+            memo = {}
+            self._proactive_search_memo = memo
+        now = time.monotonic()
+        cached = memo.get(conversation_id)
+        if cached and cached[0] == user_text and now - cached[1] < 600.0:
+            return cached[2]
+        try:
+            evidence = await proactive_search_evidence(user_text, self.config)
+        except Exception as exc:
+            # 主动检索是增强项：任何故障都不阻断正常回复。
+            LOGGER.warning(
+                "主动联网检索失败，本轮不注入背景资料：%s",
+                " ".join((str(exc) or exc.__class__.__name__).split())[:180],
+            )
+            evidence = None
+        memo[conversation_id] = (user_text, now, evidence)
+        return evidence
+
     async def _reply_with_api(
         self,
         conversation_id: str,
@@ -80,6 +108,7 @@ class EngineToolsMixin(PersonaEngineMixin):
         reply_focus: GroupReplyFocus | None = None,
         temperature_override: float | None = None,
         frequency_penalty_override: float | None = None,
+        proactive_evidence: str | None = None,
     ) -> str:
         import httpx
 
@@ -143,6 +172,10 @@ class EngineToolsMixin(PersonaEngineMixin):
                     ),
                 }
             )
+        if proactive_evidence:
+            # 主动检索证据放在工具合同与真实时间之后：模型先知道"资料已就位"，
+            # 再看到具体内容，能同时压住重复搜索和硬扯无关结果两类回归。
+            messages.append({"role": "system", "content": proactive_evidence})
         messages.append({"role": "system", "content": iteration_prompt_hint(iteration_decision)})
         messages.append(
             {
@@ -1198,6 +1231,8 @@ class EngineToolsMixin(PersonaEngineMixin):
             min(0.45, float(getattr(self.config, "temperature", 0.6))),
             0.30,
         )[: 1 + max(0, min(2, int(getattr(self.config, "chat_quality_retries", 1))))]
+        # 主动检索在重试循环外只做一次：所有温度重试共享同一份证据。
+        proactive_evidence = await self._proactive_search_for_turn(conversation_id, user_text)
         for attempt, temperature in enumerate(retry_temperatures):
             retry_system = extra_system
             if attempt:
@@ -1226,6 +1261,7 @@ class EngineToolsMixin(PersonaEngineMixin):
                         + 0.15 * attempt,
                     )
                 ),
+                proactive_evidence=proactive_evidence,
             )
             last_reply = reply
             if reply and not has_illegal_language_or_garbage(reply):

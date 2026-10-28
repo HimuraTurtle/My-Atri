@@ -20,6 +20,11 @@ from .tool_loop import (
     strip_dsml_tool_calls,
     tool_calls_from_message,
 )
+from .proactive_search import (
+    build_proactive_query,
+    proactive_search_evidence,
+    proactive_search_gate,
+)
 from .registry import ToolRegistry
 from .time_tool import get_current_time
 from .weather_tool import get_weather
@@ -33,6 +38,7 @@ __all__ = [
     "ToolRegistry",
     "append_tool_results",
     "available_tool_schemas",
+    "build_proactive_query",
     "get_current_time",
     "get_weather",
     "final_answer_from_call",
@@ -40,6 +46,8 @@ __all__ = [
     "has_unsupported_deferred_action",
     "has_unverified_research_claim",
     "parse_dsml_tool_calls",
+    "proactive_search_evidence",
+    "proactive_search_gate",
     "rejected_final_answer_messages",
     "search_web",
     "strip_dsml_tool_calls",

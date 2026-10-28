@@ -28,6 +28,7 @@ from ..llm_tools import (
     final_answer_payload_from_call,
     has_unsupported_deferred_action,
     has_unverified_research_claim,
+    proactive_search_evidence,
     rejected_final_answer_messages,
     tool_calls_from_message,
 )
