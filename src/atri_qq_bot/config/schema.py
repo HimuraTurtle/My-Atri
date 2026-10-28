@@ -169,6 +169,9 @@ class BotConfig:
     web_search_enabled: bool = True
     web_search_timeout_seconds: float = 6.0
     web_search_max_results: int = 5
+    # 每轮回复前系统侧主动联网检索一次并注入证据，不依赖模型自发调用工具。
+    # 纯问候/语气消息自动跳过；注意博查按次计费，高频群聊请评估配额。
+    web_search_proactive_enabled: bool = True
     web_page_max_chars: int = 8_000
     # 搜索提供方：auto=有博查 key 用博查否则 RSS；rss=只用免费 RSS。
     search_provider: str = "auto"

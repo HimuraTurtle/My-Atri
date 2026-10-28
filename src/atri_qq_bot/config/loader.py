@@ -306,6 +306,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         web_search_enabled=_env_bool("WEB_SEARCH_ENABLED", True),
         web_search_timeout_seconds=_env_float("WEB_SEARCH_TIMEOUT_SECONDS", 6.0),
         web_search_max_results=max(1, min(8, _env_int("WEB_SEARCH_MAX_RESULTS", 5))),
+        web_search_proactive_enabled=_env_bool("WEB_SEARCH_PROACTIVE_ENABLED", True),
         web_page_max_chars=max(1000, min(20_000, _env_int("WEB_PAGE_MAX_CHARS", 8_000))),
         search_provider=_env("SEARCH_PROVIDER", "auto").strip().casefold() or "auto",
         bocha_api_key=_optional_env("BOCHA_API_KEY"),

@@ -28,6 +28,9 @@ class EngineStateMixin(PersonaEngineMixin):
         # 每轮 reply() 开始时清空，OneBot 层写入 reply-events.jsonl 后即弃用。
         self._turn_tool_calls: dict[str, list[dict[str, Any]]] = {}
         self._turn_contradictions: dict[str, list[dict[str, Any]]] = {}
+        # 主动联网检索的轮内备忘：conversation_id -> (用户消息, 时间戳, 证据)。
+        # 同一轮内的质量重试/矛盾重写会多次进入回复管线，凭此避免重复搜索。
+        self._proactive_search_memo: dict[str, tuple[str, float, str | None]] = {}
         self._cognition_store: CognitionStateStore | None = None
         if bool(getattr(config, "cognition_shadow_enabled", False)):
             try:
