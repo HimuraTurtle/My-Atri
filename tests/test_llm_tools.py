@@ -24,6 +24,7 @@ from atri_qq_bot.llm_tools.tool_loop import (
 from atri_qq_bot.llm_tools.weather_tool import _location_candidates, format_weather_result
 from atri_qq_bot.llm_tools.web_search_tool import (
     _bing_web_rss_url,
+    _bocha_freshness,
     _compact_research_query,
     _filter_results_by_domains,
     parse_arxiv_atom,
@@ -48,6 +49,17 @@ def test_get_current_time_uses_shanghai_without_tzdata() -> None:
     assert "2026-07-04 15:21:30" in reply
     assert "星期六" in reply
     assert "Asia/Shanghai" in reply
+
+
+def test_bocha_freshness_grades_recency_windows_by_query() -> None:
+    assert _bocha_freshness("news", "今天上海有什么新闻") == "oneDay"
+    assert _bocha_freshness("auto", "现在姆巴佩在哪个队") == "oneDay"
+    assert _bocha_freshness("news", "最近有什么时事热点") == "oneWeek"
+    assert _bocha_freshness("news", "姆巴佩近况怎么样") == "oneWeek"
+    assert _bocha_freshness("news", "今年第五人格亚运会冠军") == "oneYear"
+    assert _bocha_freshness("news", "姆巴佩是谁") == "oneMonth"
+    assert _bocha_freshness("auto", "樱羽艾玛是什么角色") is None
+    assert _bocha_freshness("web", "最新版本") is None
 
 
 def test_parse_bing_news_rss_strips_html_and_limits_results() -> None:

@@ -61,7 +61,14 @@ class TestGate:
 class TestBuildQuery:
     def test_strips_conversational_fillers(self):
         assert build_proactive_query("你知道樱羽艾玛吗") == "樱羽艾玛"
-        assert build_proactive_query("帮我查一下今天有什么新闻") == "今天有什么新闻"
+        assert build_proactive_query("帮我查一下今天有什么新闻") == "今天新闻"
+
+    def test_strips_question_words(self):
+        assert build_proactive_query("查一下今年第五人格亚运会冠军是谁，队员有谁") == (
+            "今年第五人格亚运会冠军，队员"
+        )
+        assert build_proactive_query("最近有哪些新番") == "最近新番"
+        assert build_proactive_query("姆巴佩近况怎么样") == "姆巴佩近况"
 
     def test_strips_tail_particles(self):
         assert build_proactive_query("GPT-5 什么时候发布呢？") == "GPT-5 什么时候发布"
@@ -118,6 +125,41 @@ class TestEvidence:
         assert captured == [
             {"query": "樱羽艾玛", "mode": "auto", "max_results": 3}
         ]
+
+    def test_time_sensitive_message_uses_news_mode(self, monkeypatch):
+        captured: list[dict] = []
+
+        async def fake_search(arguments, config):
+            captured.append(dict(arguments))
+            return "1. 标题：结果"
+
+        monkeypatch.setattr(proactive_module, "search_web", fake_search)
+        for text in (
+            "最近有什么时事新闻",
+            "今天发生了什么大事",
+            "姆巴佩近况怎么样",
+            "查一下今年第五人格亚运会冠军是谁，队员有谁",
+        ):
+            captured.clear()
+            asyncio.run(proactive_search_evidence(text, _config()))
+            assert captured[0]["mode"] == "news", text
+
+    def test_plain_question_uses_auto_mode(self, monkeypatch):
+        captured: list[dict] = []
+
+        async def fake_search(arguments, config):
+            captured.append(dict(arguments))
+            return "1. 标题：结果"
+
+        monkeypatch.setattr(proactive_module, "search_web", fake_search)
+        for text in (
+            "你知道樱羽艾玛吗",
+            "GPT-5 什么时候发布",
+            "量子计算机的原理是什么",
+        ):
+            captured.clear()
+            asyncio.run(proactive_search_evidence(text, _config()))
+            assert captured[0]["mode"] == "auto", text
 
     def test_unexpected_search_exception_propagates_to_caller(self, monkeypatch):
         async def fake_search(arguments, config):

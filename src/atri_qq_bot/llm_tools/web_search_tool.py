@@ -315,6 +315,28 @@ def _bocha_enabled(config: Any) -> bool:
     return bool(str(getattr(config, "bocha_api_key", "") or "").strip())
 
 
+# 博查 freshness 分级：时敏词越强窗口越窄，避免"最近/今天"类查询
+# 拿到陈旧资料后模型只能说"信息滞后"。
+_FRESHNESS_ONE_DAY_RE = re.compile(r"今天|今日|现在|此刻|刚刚|昨晚|昨夜|今晚|实时")
+_FRESHNESS_ONE_WEEK_RE = re.compile(r"最近|最新|本周|这周|近况|近日|近来|新闻|时事|热点|上新|新出|新番")
+_FRESHNESS_ONE_YEAR_RE = re.compile(r"今年|去年|年内")
+
+
+def _bocha_freshness(mode: str, query: str) -> str | None:
+    """按查询词的时间敏感度选博查时效窗口；普通网页查询不加过滤。"""
+
+    text = str(query or "")
+    if _FRESHNESS_ONE_DAY_RE.search(text):
+        return "oneDay"
+    if mode != "news":
+        return None
+    if _FRESHNESS_ONE_WEEK_RE.search(text):
+        return "oneWeek"
+    if _FRESHNESS_ONE_YEAR_RE.search(text):
+        return "oneYear"
+    return "oneMonth"
+
+
 async def _search_bocha(
     client: Any,
     query: str,
@@ -336,8 +358,9 @@ async def _search_bocha(
     }
     if domains:
         payload["include"] = "|".join(domains)
-    if mode == "news":
-        payload["freshness"] = "oneMonth"
+    freshness = _bocha_freshness(mode, query)
+    if freshness:
+        payload["freshness"] = freshness
     response = await client.post(
         "https://api.bochaai.com/v1/web-search",
         headers={
