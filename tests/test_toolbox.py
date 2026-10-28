@@ -269,7 +269,8 @@ def test_toolbox_uses_vision_analysis_for_images(monkeypatch, tmp_path) -> None:
     assert "图片内容分析" in prompt
     assert "清晨房间截图" in prompt
     assert "生活感" in prompt
-    assert "优先围绕当前画面或表情情绪回复" in prompt
+    assert "不要每次都复述或描述画面内容" in prompt
+    assert "只有用户问图里有什么" in prompt
     assert context.visual_status == "verified"
 
 
