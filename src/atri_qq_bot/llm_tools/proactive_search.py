@@ -8,10 +8,13 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from .web_search_tool import search_web
+
+LOGGER = logging.getLogger(__name__)
 
 
 # 纯问候/纯语气消息不值得占用一次搜索（博查按次计费、RSS 也有延迟），
@@ -65,7 +68,15 @@ _QUERY_FILLER_RE = re.compile(
     r"跟我说说|和我说说|讲讲|说说|告诉我|我想知道|我想问|我问你|问一下|"
     r"问下|你觉得|你认为|你说|帮我看看|帮我查查|帮我查一下|帮我查|"
     r"查一下|搜一下|搜索一下|查查|请问|请告诉我|我好奇|好奇|"
+    r"都有哪些|都有什么|都有谁|有哪些|有什么|有谁|是谁|是什么|怎么样|"
     r"能不能|能不能给我|可以给我|给我看看|给我)"
+)
+
+# 时敏消息标记：这类查询要的是近期发生的事，走 news 模式让博查加
+# 时效过滤、RSS 兜底也优先新闻源，避免注入陈旧资料后模型说"信息滞后"。
+_NEWS_MODE_RE = re.compile(
+    r"最近|最新|今天|今日|现在|此刻|刚刚|昨晚|昨夜|今晚|本周|这周|"
+    r"近况|近日|近来|新闻|时事|热点|新出|上新|新番|实时|当下|今年|去年"
 )
 
 # 句尾语气助词；对检索词只有噪音价值。
@@ -108,22 +119,38 @@ def build_proactive_query(user_text: str) -> str:
     return cleaned[:_MAX_QUERY_CHARS]
 
 
+def _gate_reason(user_text: str, config: Any) -> str | None:
+    """返回跳过原因；返回 None 表示本轮值得主动搜索。"""
+
+    if not bool(getattr(config, "web_search_enabled", True)):
+        return "联网搜索已关闭"
+    if not bool(getattr(config, "web_search_proactive_enabled", True)):
+        return "主动检索开关已关闭"
+    text = str(user_text or "").strip()
+    if not text:
+        return "消息为空"
+    # 太短的消息没有可检索的话题实体。
+    if len(text) < 4:
+        return "消息过短"
+    if _is_trivial_message(text):
+        return "纯问候/语气消息"
+    return None
+
+
 def proactive_search_gate(user_text: str, config: Any) -> bool:
     """判断本轮是否值得主动搜索；返回 False 时完全跳过。"""
 
-    if not bool(getattr(config, "web_search_enabled", True)):
-        return False
-    if not bool(getattr(config, "web_search_proactive_enabled", True)):
-        return False
-    text = str(user_text or "").strip()
-    if not text:
-        return False
-    # 太短的消息没有可检索的话题实体。
-    if len(text) < 4:
-        return False
-    if _is_trivial_message(text):
-        return False
-    return True
+    return _gate_reason(user_text, config) is None
+
+
+def _search_mode_for(user_text: str) -> str:
+    """时敏消息走 news 模式（博查时效过滤 + 新闻源优先），其余 auto。"""
+
+    return "news" if _NEWS_MODE_RE.search(str(user_text or "")) else "auto"
+
+
+def _log_preview(text: str, limit: int = 40) -> str:
+    return " ".join(str(text or "").split())[:limit]
 
 
 async def proactive_search_evidence(user_text: str, config: Any) -> str | None:
@@ -133,11 +160,24 @@ async def proactive_search_evidence(user_text: str, config: Any) -> str | None:
     明白本轮没有可靠外部资料，走正常聊天路径。
     """
 
-    if not proactive_search_gate(user_text, config):
+    reason = _gate_reason(user_text, config)
+    if reason:
+        LOGGER.info("主动联网检索跳过：%s（text=%r）", reason, _log_preview(user_text))
         return None
     query = build_proactive_query(user_text)
     if not query.strip():
+        LOGGER.info("主动联网检索跳过：清洗后检索词为空（text=%r）", _log_preview(user_text))
         return None
+    mode = _search_mode_for(user_text)
     max_results = max(1, min(3, int(getattr(config, "web_search_max_results", 5) or 5)))
-    result = await search_web({"query": query, "mode": "auto", "max_results": max_results}, config)
+    result = await search_web({"query": query, "mode": mode, "max_results": max_results}, config)
+    if result.startswith("搜索失败") or "没有搜索到明确结果" in result[:200]:
+        LOGGER.info(
+            "主动联网检索无可用结果：query=%r mode=%s：%s",
+            query,
+            mode,
+            _log_preview(result, 120),
+        )
+    else:
+        LOGGER.info("主动联网检索完成：query=%r mode=%s 注入证据 %d 字", query, mode, len(result))
     return f"{_EVIDENCE_HEADER}\n\n{result}"
