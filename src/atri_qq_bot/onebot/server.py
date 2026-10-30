@@ -101,6 +101,7 @@ from .server_parts.server_events import OneBotEventMixin
 from .server_parts.server_manga import OneBotMangaMixin
 from .server_parts.server_meme_stealer import OneBotMemeStealMixin
 from .server_parts.server_minimax_draw import OneBotMinimaxDrawMixin
+from .server_parts.server_papers import OneBotPapersMixin
 from .server_parts.server_proactive import OneBotProactiveMixin
 from .server_parts.server_qzone import OneBotQzoneMixin
 from .server_parts.server_screen_watch import OneBotScreenWatchMixin
@@ -115,6 +116,7 @@ class OneBotServer(
     OneBotMangaMixin,
     OneBotAnimaMixin,
     OneBotMinimaxDrawMixin,
+    OneBotPapersMixin,
     OneBotBilibiliMixin,
     OneBotAvatarMixin,
     OneBotWhatToEatMixin,

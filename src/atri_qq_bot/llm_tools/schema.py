@@ -42,6 +42,7 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
         tools.append(_fact_check_schema())
     if bool(getattr(config, "papers_enabled", True)):
         tools.append(_paper_search_schema())
+        tools.append(_paper_digest_schema())
     if bool(getattr(config, "qzone_enabled", False)) and bool(
         getattr(config, "qzone_ai_tools_enabled", True)
     ):
@@ -627,6 +628,47 @@ def _paper_search_schema() -> dict[str, Any]:
                     },
                 },
                 "required": ["query"],
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _paper_digest_schema() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "compile_paper_digest",
+            "description": (
+                "把本会话最近一次 search_papers 检索到的论文整理成 Word 文档"
+                "并发送给用户（私聊与群聊均可）。用户看过论文检索结果后要求"
+                "「整理成文档」「总结成文件」「发我一份」时调用；本会话还没"
+                "检索过论文时不要调用，先调 search_papers。默认整理全部论文，"
+                "用户只要其中几篇时用 indices 按检索结果顺序指定（从 1 开始）。"
+                "summary 传你基于检索结果写的中文综述（研究脉络、方法对比、"
+                "适合谁读，可多段），没有可写的内容就留空，严禁编造。"
+                "文档生成成功后系统会在你的回复发出后自动发送文件，"
+                "回复里说明发的是什么即可，不要谎称文件已发出。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "indices": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1},
+                        "description": (
+                            "要整理的论文序号（按检索结果顺序从 1 开始），"
+                            "默认全部。"
+                        ),
+                    },
+                    "summary": {
+                        "type": "string",
+                        "description": (
+                            "中文综述（基于检索结果的真实内容，多段用换行分隔），"
+                            "没有合适内容时留空。"
+                        ),
+                    },
+                },
                 "additionalProperties": False,
             },
         },

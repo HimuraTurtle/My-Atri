@@ -611,7 +611,9 @@ class EngineToolsMixin(PersonaEngineMixin):
         if name == "fact_check":
             return await self._execute_fact_check_tool(arguments, config)
         if name == "search_papers":
-            return await self._execute_paper_search_tool(arguments, config)
+            return await self._execute_paper_search_tool(conversation_id, arguments, config)
+        if name == "compile_paper_digest":
+            return await self._execute_paper_digest_tool(conversation_id, arguments, config)
         if name.startswith("qzone_"):
             return await self._execute_qzone_tool(conversation_id, name, arguments, config)
         return None
@@ -650,6 +652,7 @@ class EngineToolsMixin(PersonaEngineMixin):
 
     async def _execute_paper_search_tool(
         self,
+        conversation_id: str,
         arguments: dict[str, Any],
         config: Any,
     ) -> str:
@@ -672,7 +675,70 @@ class EngineToolsMixin(PersonaEngineMixin):
             data = await service.search(query, limit=limit, sort=sort)
         except Exception as exc:
             return f"论文检索执行失败：{exc}。不要编造论文，坦诚说明没查到。"
+        if data.get("ok"):
+            service.remember_search(conversation_id, data)
         return _json.dumps(data, ensure_ascii=False)
+
+    async def _execute_paper_digest_tool(
+        self,
+        conversation_id: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import json as _json
+        from pathlib import Path as _Path
+
+        from ..papers import build_paper_digest, get_papers_service
+
+        service = get_papers_service(config)
+        if service is None:
+            return "论文整理功能未启用，请直接用文字回复。"
+        last = service.last_search(conversation_id)
+        papers = list(last.get("papers") or []) if last else []
+        if not papers:
+            return (
+                "本会话还没有可整理的论文检索结果（或已超过 30 分钟失效）。"
+                "请先用 search_papers 检索，再整理成文档。"
+            )
+        raw_indices = arguments.get("indices")
+        if raw_indices is not None:
+            if not isinstance(raw_indices, (list, tuple)) or not raw_indices:
+                return "indices 参数无效：应为论文序号数组（从 1 开始），或不传表示全部。"
+            try:
+                indices = sorted({int(i) for i in raw_indices})
+            except (TypeError, ValueError):
+                return "indices 参数无效：应为论文序号数组（从 1 开始），或不传表示全部。"
+            total = len(papers)
+            if any(i < 1 or i > total for i in indices):
+                return f"indices 超出范围：本次检索共 {total} 篇，序号 1~{total}。"
+            papers = [papers[i - 1] for i in indices]
+        summary = str(arguments.get("summary") or "").strip()
+        from ..config.env import _project_root as _project_root_for_digest
+
+        output_dir = _project_root_for_digest() / "data" / "runtime" / "paper_digests"
+        try:
+            result = build_paper_digest(
+                query=str(last.get("query") or ""),
+                sort=str(last.get("sort") or "relevance"),
+                papers=papers,
+                summary=summary,
+                output_dir=output_dir,
+            )
+        except Exception as exc:
+            return f"论文整理文档生成失败：{exc}。不要谎称已发送，向用户坦诚说明。"
+        if not result.get("ok"):
+            return f"论文整理文档生成失败：{result.get('error')}。不要谎称已发送。"
+        service.queue_digest_delivery(conversation_id, _Path(result["path"]))
+        return _json.dumps(
+            {
+                "ok": True,
+                "format": result["format"],
+                "file": result["name"],
+                "count": result["count"],
+                "delivery": "文件将在本次回复发出后自动发送，回复里说明即可，不要谎称已发出。",
+            },
+            ensure_ascii=False,
+        )
 
     def _qzone_owner_allowed(self, conversation_id: str, config: Any) -> bool:
         """点赞/评论是以机器人身份发出的公开动作，仅主人的私聊会话可用。"""

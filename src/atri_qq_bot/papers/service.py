@@ -15,6 +15,8 @@
 from __future__ import annotations
 
 import logging
+import time
+from pathlib import Path
 from typing import Any
 
 import httpx
@@ -28,6 +30,9 @@ _MAX_LIMIT = 8
 # 相关度候选池大小：cited/newest 在该池内重排，池必须大于等于最大 limit。
 _FETCH_LIMIT = 50
 _SORTS = {"relevance", "newest", "cited"}
+# 最近一次检索结果的会话级缓存：compile_paper_digest 从这里取素材。
+_LAST_SEARCH_TTL_SECONDS = 1800.0
+_MAX_REMEMBERED_CONVERSATIONS = 64
 
 
 def _rebuild_abstract(inverted: Any) -> str:
@@ -96,10 +101,44 @@ def _to_paper(work: dict[str, Any]) -> dict[str, Any]:
 
 
 class PapersService:
-    """OpenAlex 文献检索：纯只读 HTTP 查询，无状态、无本地缓存。"""
+    """OpenAlex 文献检索：只读 HTTP 查询。
+
+    服务自身只带两块轻状态：每会话最近一次成功检索的结果（供
+    compile_paper_digest 整理成文档）与待投递文档队列（OneBot 层
+    在文字回复发出后消费，与 minimax/anima 同一模式）。
+    """
 
     def __init__(self, config: Any) -> None:
         self._config = config
+        self._last_searches: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._digest_deliveries: dict[str, list[Path]] = {}
+
+    def remember_search(self, conversation_id: str, payload: dict[str, Any]) -> None:
+        """记录会话最近一次成功检索，供稍后整理成文档。"""
+        if not payload.get("ok") or not payload.get("papers"):
+            return
+        self._last_searches[str(conversation_id)] = (time.monotonic(), dict(payload))
+        if len(self._last_searches) > _MAX_REMEMBERED_CONVERSATIONS:
+            oldest = sorted(self._last_searches.items(), key=lambda kv: kv[1][0])
+            for key, _ in oldest[: len(self._last_searches) - _MAX_REMEMBERED_CONVERSATIONS]:
+                self._last_searches.pop(key, None)
+
+    def last_search(self, conversation_id: str) -> dict[str, Any] | None:
+        entry = self._last_searches.get(str(conversation_id))
+        if entry is None:
+            return None
+        stamp, payload = entry
+        if time.monotonic() - stamp > _LAST_SEARCH_TTL_SECONDS:
+            self._last_searches.pop(str(conversation_id), None)
+            return None
+        return payload
+
+    def queue_digest_delivery(self, conversation_id: str, path: Path) -> None:
+        queue = self._digest_deliveries.setdefault(str(conversation_id), [])
+        queue.append(Path(path))
+
+    def consume_digest_deliveries(self, conversation_id: str) -> list[Path]:
+        return self._digest_deliveries.pop(str(conversation_id), [])
 
     async def search(
         self, query: str, limit: int = 5, sort: str = "relevance"
