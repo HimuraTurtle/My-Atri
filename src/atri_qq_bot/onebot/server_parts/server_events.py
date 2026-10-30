@@ -503,6 +503,7 @@ class OneBotEventMixin(OneBotServerMixin):
         await self._deliver_pending_manga(websocket, event, conversation_id)
         await self._deliver_pending_anima(websocket, event, conversation_id)
         await self._deliver_pending_minimax_draw(websocket, event, conversation_id)
+        await self._deliver_pending_paper_digest(websocket, event, conversation_id)
         if self.insights is not None:
             # submit 只创建一个后台持久化任务；SQLite、向量模型和 DeepSeek
             # 都在独立 worker 中执行，不延长本轮 QQ 回复耗时。
