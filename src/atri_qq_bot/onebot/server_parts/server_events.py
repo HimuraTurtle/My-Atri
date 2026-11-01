@@ -425,6 +425,10 @@ class OneBotEventMixin(OneBotServerMixin):
                     delivered_text="",
                     voice_mode="",
                 )
+            # 回复文字失败不代表本轮工具成果要作废：漫画/绘画/论文整理
+            # 是用户本轮明确索要的交付物，照常投递，避免滞留队列到
+            # 未来某轮脱离语境地补发。
+            await self._deliver_pending_artifacts(websocket, event, conversation_id)
             return
         profile = self.reply_engine.profile_for(profile_id)
         outgoing = build_outgoing_messages(
@@ -469,6 +473,7 @@ class OneBotEventMixin(OneBotServerMixin):
                     delivered_text="",
                     voice_mode="",
                 )
+            await self._deliver_pending_artifacts(websocket, event, conversation_id)
             return
         self._mark_smart_group_reply(event, conversation_id, plain_text)
         recorded_reply = delivered_text
@@ -500,10 +505,7 @@ class OneBotEventMixin(OneBotServerMixin):
             reply_focus_text=str(getattr(group_reply_focus, "focus_text", "") or ""),
             quoted_message_id=quoted_message_id,
         )
-        await self._deliver_pending_manga(websocket, event, conversation_id)
-        await self._deliver_pending_anima(websocket, event, conversation_id)
-        await self._deliver_pending_minimax_draw(websocket, event, conversation_id)
-        await self._deliver_pending_paper_digest(websocket, event, conversation_id)
+        await self._deliver_pending_artifacts(websocket, event, conversation_id)
         if self.insights is not None:
             # submit 只创建一个后台持久化任务；SQLite、向量模型和 DeepSeek
             # 都在独立 worker 中执行，不延长本轮 QQ 回复耗时。
@@ -519,5 +521,23 @@ class OneBotEventMixin(OneBotServerMixin):
                     model_name=delivery_model_name,
                 )
             )
+
+    async def _deliver_pending_artifacts(
+        self,
+        websocket: Any,
+        event: dict[str, Any],
+        conversation_id: str,
+    ) -> None:
+        """投递本轮工具排队的交付物（漫画/绘画/论文整理文档）。
+
+        正常回复、回复文字失败、消息未获 OneBot 确认三条路径都会走到
+        这里：这些文件是用户本轮明确索要的真实成果，不应随文字失败
+        一起丢失，也不能滞留队列到未来某轮脱离语境地补发。各投递
+        方法对空队列是无操作，对自身异常有自己的兜底文案。
+        """
+        await self._deliver_pending_manga(websocket, event, conversation_id)
+        await self._deliver_pending_anima(websocket, event, conversation_id)
+        await self._deliver_pending_minimax_draw(websocket, event, conversation_id)
+        await self._deliver_pending_paper_digest(websocket, event, conversation_id)
 
 

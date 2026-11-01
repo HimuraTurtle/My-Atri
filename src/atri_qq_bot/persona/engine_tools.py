@@ -6,6 +6,10 @@ from .engine_support import PersonaEngineMixin
 
 LOGGER = logging.getLogger("atri.persona")
 
+# 主动检索备忘录的会话数上限：超出时先剔除过期条目、再丢最旧，
+# 防止长运行下证据文本缓慢累积吃内存。
+_PROACTIVE_MEMO_MAX_ENTRIES = 128
+
 
 def _tool_action_summary(name: str, arguments: dict[str, Any]) -> str:
     """工具成功回执 → 账本摘要。摘要要带话题词，方便后续 bigram 对账。"""
@@ -92,6 +96,15 @@ class EngineToolsMixin(PersonaEngineMixin):
             )
             evidence = None
         memo[conversation_id] = (user_text, now, evidence)
+        if len(memo) > _PROACTIVE_MEMO_MAX_ENTRIES:
+            # 备忘录无限增长会缓慢吃内存：先剔除过期条目，
+            # 仍超限则按写入时间丢最旧（证据文本可达数千字）。
+            expired = [key for key, entry in memo.items() if now - entry[1] >= 600.0]
+            for key in expired:
+                memo.pop(key, None)
+            while len(memo) > _PROACTIVE_MEMO_MAX_ENTRIES:
+                oldest = min(memo.items(), key=lambda item: item[1][1])[0]
+                memo.pop(oldest, None)
         return evidence
 
     async def _reply_with_api(

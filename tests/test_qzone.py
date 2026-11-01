@@ -267,6 +267,32 @@ class TestStore:
         assert store.already_logged("like", "t2") is False
         assert len(store.logs(action="like")) == 1
 
+    def test_action_log_retention_prunes_old_rows(self, store):
+        with store._lock, store._connect() as db:
+            db.execute(
+                "INSERT INTO qzone_automation_logs"
+                "(action,user_id,tid,content,status,error,created_at)"
+                " VALUES('like','1','t-old','','success','',?)",
+                (time.time() - 200 * 86400,),
+            )
+        assert store.already_logged("like", "t-old") is True
+        store.log("like", tid="t-new", status="success")  # 首次写入触发节流清理
+        assert store.already_logged("like", "t-old") is False
+        assert store.already_logged("like", "t-new") is True
+
+    def test_action_log_retention_throttled_within_interval(self, store):
+        with store._lock, store._connect() as db:
+            db.execute(
+                "INSERT INTO qzone_automation_logs"
+                "(action,user_id,tid,content,status,error,created_at)"
+                " VALUES('like','1','t-old','','success','',?)",
+                (time.time() - 200 * 86400,),
+            )
+        store._last_pruned_at = time.monotonic()  # 模拟刚清理过
+        store.log("like", tid="t-new", status="success")
+        assert store.already_logged("like", "t-old") is True  # 24 小时内不重复清理
+        assert store.already_logged("like", "t-new") is True
+
     def test_recent_post_contents_and_count(self, store):
         store.log("post", tid="t1", content="第一条说说", status="success")
         store.log("post", tid="t2", content="第二条说说", status="success")

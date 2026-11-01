@@ -253,3 +253,60 @@ def test_server_routes_previous_share_and_focus_to_same_reply(monkeypatch, tmp_p
         "share",
         "at",
     ]
+
+
+def test_server_delivers_pending_artifacts_when_reply_fails(monkeypatch, tmp_path) -> None:
+    """回复文字失败时，本轮工具排队的交付物（论文整理文档）仍要投递。"""
+    import atri_qq_bot.papers
+
+    config = BotConfig(
+        bot_qq=BOT_QQ,
+        host="127.0.0.1",
+        port=8765,
+        reply_mode="mention",
+        openai_api_key=None,
+        openai_base_url="https://example.test/v1",
+        openai_model="test-model",
+        temperature=0.4,
+        max_tokens=350,
+        memory_path=tmp_path / "memory.json",
+    )
+    engine = AtriReplyEngine(config)
+    server = OneBotServer(config, engine)
+    server._event_log = tmp_path / "onebot-events.log"
+    server._reply_event_log = tmp_path / "reply-events.jsonl"
+    server._voice_event_log = tmp_path / "voice-events.log"
+
+    async def fake_analyze(event, plain_text, call_action, *, allow_vision=True):
+        del event, plain_text, call_action, allow_vision
+        return None
+
+    async def failing_reply(*args, **kwargs):
+        return ""  # 模拟回复生成失败
+
+    sent: list[tuple[str, str]] = []
+
+    async def fake_send_reply(websocket, event, messages, **kwargs):
+        for message in messages:
+            sent.append((message.kind, str(message.content)))
+        return "已发送"
+
+    monkeypatch.setattr(server.tools, "analyze", fake_analyze)
+    monkeypatch.setattr(engine, "reply", failing_reply)
+    monkeypatch.setattr(server, "send_reply", fake_send_reply)
+
+    digest = tmp_path / "论文整理.docx"
+    digest.write_bytes(b"PK")
+    service = atri_qq_bot.papers.get_papers_service(config)
+    assert service is not None
+    service.queue_digest_delivery(f"group:{GROUP_ID}", digest)
+    monkeypatch.setattr(
+        atri_qq_bot.papers, "get_papers_service", lambda cfg: service
+    )
+
+    mention = _group_event(10001, _at_bot())
+    mention.update({"self_id": BOT_QQ, "sender": {"card": "A"}})
+    asyncio.run(server._handle_event(object(), mention))
+
+    assert ("file", str(digest)) in sent
+    assert service.consume_digest_deliveries(f"group:{GROUP_ID}") == []

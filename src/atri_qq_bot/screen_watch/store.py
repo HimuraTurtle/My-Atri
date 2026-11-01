@@ -14,12 +14,18 @@ from typing import Any
 
 
 class ScreenWatchStore:
+    # 摘要只通过 recent(max_age_hours) 近期读取，保留 30 天绰绰有余；
+    # 无删除策略会让围观模式的长期运行无限累积行。
+    _RETENTION_DAYS = 30.0
+    _PRUNE_INTERVAL_SECONDS = 86400.0
+
     def __init__(self, path: Path) -> None:
         path = Path(path)
         path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
+        self._last_pruned_at = 0.0
         self._init_db()
 
     def _init_db(self) -> None:
@@ -50,7 +56,24 @@ class ScreenWatchStore:
                 " VALUES (?, ?, ?, ?)",
                 (time.time(), kind, str(window_title or "")[:200], text),
             )
-            return int(cursor.lastrowid or 0)
+            inserted = int(cursor.lastrowid or 0)
+        self._maybe_prune()
+        return inserted
+
+    def _maybe_prune(self) -> None:
+        """每 24 小时至多清一次过期摘要（节流写，不额外起定时器）。"""
+        now = time.monotonic()
+        if now - self._last_pruned_at < self._PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_pruned_at = now
+        cutoff = time.time() - self._RETENTION_DAYS * 86400.0
+        try:
+            with self._lock, self._conn:
+                self._conn.execute(
+                    "DELETE FROM screen_summaries WHERE created_at < ?", (cutoff,)
+                )
+        except sqlite3.Error:
+            pass
 
     def recent(self, limit: int = 3, max_age_hours: float | None = None) -> list[dict[str, Any]]:
         with self._lock:

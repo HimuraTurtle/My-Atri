@@ -212,6 +212,24 @@ class TestEngineMemo:
         assert first == "证据：第一条消息"
         assert second == "证据：第二条消息"
 
+    def test_memo_cap_drops_oldest_entries(self, monkeypatch):
+        from atri_qq_bot.persona import engine_tools as engine_tools_module
+
+        async def fake_evidence(user_text, config):
+            return "证据"
+
+        monkeypatch.setattr(
+            "atri_qq_bot.persona.core.proactive_search_evidence", fake_evidence
+        )
+        engine = _FakeEngine(_config())
+        cap = engine_tools_module._PROACTIVE_MEMO_MAX_ENTRIES
+        for index in range(cap + 5):
+            asyncio.run(engine._proactive_search_for_turn(f"c{index}", f"消息{index}"))
+        assert len(engine._proactive_search_memo) == cap
+        assert "c0" not in engine._proactive_search_memo
+        assert "c4" not in engine._proactive_search_memo
+        assert f"c{cap + 4}" in engine._proactive_search_memo
+
     def test_gate_skip_is_also_memoized(self, monkeypatch):
         calls: list[str] = []
 

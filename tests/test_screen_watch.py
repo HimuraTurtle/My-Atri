@@ -205,6 +205,31 @@ class TestStore:
         rows = store.recent(limit=3, max_age_hours=-0.01)
         assert rows == []
 
+    def test_retention_prunes_old_rows_on_write(self, tmp_path: Path):
+        store = ScreenWatchStore(tmp_path / "summaries.db")
+        with store._lock, store._conn:
+            store._conn.execute(
+                "INSERT INTO screen_summaries(created_at, kind, window_title, summary)"
+                " VALUES (?, 'auto', '', '很旧的摘要')",
+                (time.time() - 60 * 86400,),
+            )
+        assert store.count_since(0) == 1
+        store.add_summary("新摘要")  # 首次写入触发节流清理
+        assert store.count_since(0) == 1
+        assert store.recent(limit=10)[0]["summary"] == "新摘要"
+
+    def test_retention_throttled_within_interval(self, tmp_path: Path):
+        store = ScreenWatchStore(tmp_path / "summaries.db")
+        with store._lock, store._conn:
+            store._conn.execute(
+                "INSERT INTO screen_summaries(created_at, kind, window_title, summary)"
+                " VALUES (?, 'auto', '', '很旧的摘要')",
+                (time.time() - 60 * 86400,),
+            )
+        store._last_pruned_at = time.monotonic()  # 模拟刚清理过
+        store.add_summary("新摘要")
+        assert store.count_since(0) == 2  # 24 小时内不重复清理
+
 
 class TestVisionGuard:
     def test_missing_config_returns_empty(self, tmp_path: Path):

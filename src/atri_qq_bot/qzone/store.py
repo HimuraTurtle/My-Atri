@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import sqlite3
 import threading
 import time
@@ -17,6 +18,8 @@ from pathlib import Path
 from typing import Any
 
 from ..runtime.paths import PROJECT_ROOT
+
+LOGGER = logging.getLogger(__name__)
 
 DEFAULT_SETTINGS: dict[str, Any] = {
     "devlog_last_scan_sha": "",
@@ -35,12 +38,18 @@ DEFAULT_SETTINGS: dict[str, Any] = {
 
 
 class QzoneStore:
+    # 动作日志只服务幂等判断与近期排重，保留 180 天足够；无删除策略
+    # 会让表在长运行下无限增长。
+    _LOG_RETENTION_DAYS = 180.0
+    _PRUNE_INTERVAL_SECONDS = 86400.0
+
     def __init__(self, path: Path | None = None) -> None:
         if path is None:
             path = PROJECT_ROOT / "data" / "qzone_automation.sqlite3"
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
+        self._last_pruned_at = 0.0
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -147,6 +156,22 @@ class QzoneStore:
                 "(action,user_id,tid,content,status,error,created_at) VALUES(?,?,?,?,?,?,?)",
                 (action, str(user_id), str(tid), str(content), status, str(error)[:500], time.time()),
             )
+        self._maybe_prune_logs()
+
+    def _maybe_prune_logs(self) -> None:
+        """每 24 小时至多清一次过期动作日志（节流写，不额外起定时器）。"""
+        now = time.monotonic()
+        if now - self._last_pruned_at < self._PRUNE_INTERVAL_SECONDS:
+            return
+        self._last_pruned_at = now
+        cutoff = time.time() - self._LOG_RETENTION_DAYS * 86400.0
+        try:
+            with self._lock, self._connect() as db:
+                db.execute(
+                    "DELETE FROM qzone_automation_logs WHERE created_at < ?", (cutoff,)
+                )
+        except sqlite3.Error:
+            LOGGER.warning("qzone 动作日志清理失败，下次写入时重试")
 
     def already_logged(self, action: str, tid: str) -> bool:
         with self._lock, self._connect() as db:
