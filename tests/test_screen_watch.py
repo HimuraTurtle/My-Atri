@@ -779,7 +779,7 @@ class TestWatchParty:
         monkeypatch.setattr(
             party_module,
             "generate_commentary",
-            lambda config, activity, description, persona_system, last="": f"（盯着）{activity}好认真",
+            lambda config, activity, description, persona_system, last="", recent_history=None: f"（盯着）{activity}好认真",
         )
         assert party.tick(now=1000.0)["event"] == "idle"
         assert party.tick(now=1001.0)["event"] == "idle"
@@ -847,7 +847,7 @@ class TestWatchParty:
         monkeypatch.setattr(
             party_module,
             "generate_commentary",
-            lambda config, activity, description, persona_system, last="": "",
+            lambda config, activity, description, persona_system, last="", recent_history=None: "",
         )
         party.tick(now=4000.0)
         party.tick(now=4001.0)
@@ -1010,8 +1010,107 @@ class TestWatchParty:
         )
         assert comment == "（搬来小椅子）父亲写论文，我看着呢！"
         assert "公式推导" in calls[-1]["prompt"]
-        assert "换个角度" in calls[-1]["prompt"]
+        assert "换一种感受" in calls[-1]["prompt"]
         assert calls[-1]["max_tokens"] == party_module._COMMENT_MAX_TOKENS
+
+    def test_comment_prompt_demands_bystander_feelings_not_description(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """围观评论定位：旁观者感受优先，不复述画面、不提性能数据。"""
+        from atri_qq_bot.screen_watch import party as party_module
+
+        calls: list[dict[str, object]] = []
+
+        def fake_chat(config, persona_system, prompt, *, max_tokens):
+            calls.append({"prompt": prompt})
+            return "好难啊，这关看着就离谱"
+
+        monkeypatch.setattr(party_module, "_chat_completion", fake_chat)
+        config = _config(tmp_path)
+        party_module.generate_commentary(config, "打游戏", "打到最终Boss血量见底", ["人格"])
+        prompt = str(calls[-1]["prompt"])
+        assert "自己的感受" in prompt
+        assert "复述画面" in prompt
+        assert "帧率" in prompt and "CPU" in prompt
+        assert "必须基于画面" in prompt or "有画面依据" in prompt
+        assert "从早到近" not in prompt  # 无历史时不注入空块
+
+    def test_comment_prompt_includes_recent_history_block(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """带画面历史时注入"从早到近"连续块，让评论对过程反应。"""
+        from atri_qq_bot.screen_watch import party as party_module
+
+        calls: list[dict[str, object]] = []
+
+        def fake_chat(config, persona_system, prompt, *, max_tokens):
+            calls.append({"prompt": prompt})
+            return "又没打过，好难啊"
+
+        monkeypatch.setattr(party_module, "_chat_completion", fake_chat)
+        config = _config(tmp_path)
+        party_module.generate_commentary(
+            config,
+            "打游戏",
+            "团灭结算画面",
+            ["人格"],
+            recent_history=["开局满血打Boss", "Boss血量见底"],
+        )
+        prompt = str(calls[-1]["prompt"])
+        assert "从早到近" in prompt
+        assert "开局满血打Boss" in prompt
+        assert "Boss血量见底" in prompt
+        assert "团灭结算画面" in prompt
+        assert prompt.index("开局满血打Boss") < prompt.index("团灭结算画面")
+
+    def test_party_tick_feeds_history_into_commentary(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """第二次评论带上第一眼的画面：观察连贯性，评论针对一段过程。"""
+        from itertools import cycle
+
+        from PIL import Image
+
+        from atri_qq_bot.screen_watch import party as party_module
+
+        party = self._party(tmp_path)
+        frames = iter(
+            cycle(
+                [
+                    Image.new("RGB", (160, 90), (0, 0, 0)),
+                    Image.new("RGB", (160, 90), (255, 255, 255)),
+                ]
+            )
+        )
+        monkeypatch.setattr(party_module, "capture_screen", lambda monitor=1: next(frames))
+        monkeypatch.setattr(party_module, "active_window_title", lambda: "记事本")
+        descriptions = iter(["开局满血打Boss", "Boss血量见底团灭"])
+        monkeypatch.setattr(
+            party_module,
+            "describe_screen",
+            lambda jpeg, config: next(descriptions),
+        )
+        calls: list[dict[str, object]] = []
+
+        def fake_commentary(
+            config, activity, description, persona_system, last="", recent_history=None
+        ):
+            calls.append(
+                {"description": description, "history": list(recent_history or [])}
+            )
+            return "好难啊"
+
+        monkeypatch.setattr(party_module, "generate_commentary", fake_commentary)
+        assert party.tick(now=1000.0)["event"] == "idle"
+        assert party.tick(now=1001.0)["event"] == "idle"
+        assert party.tick(now=1002.0)["event"] == "comment"
+        assert party.tick(now=1003.0)["event"] == "idle"  # 冷却内变化不评论
+        assert party.tick(now=1200.0)["event"] == "idle"
+        assert party.tick(now=1201.0)["event"] == "comment"
+
+        assert calls[0]["history"] == []
+        assert calls[1]["history"] == ["开局满血打Boss"]
+        assert calls[1]["description"] == "Boss血量见底团灭"
 
     def test_generated_replies_fallback_without_owner_title(
         self, tmp_path: Path, monkeypatch

@@ -6,10 +6,12 @@
 （宽松规则，宁可误停也不刷屏）。
 
 所有对外回应（开启宣告、结束告别、围观短评、失败收工）都由主聊天
-模型结合人格与记忆背景生成，不写死模板。称呼是账号级的：私聊围观用
-该账号自己档案里设定的称呼（换账号换称呼，无全局称呼），群聊围观不
-带入私聊专属称呼；任何场景都禁止使用「主人」一词。LLM 失败时退回
-不含具体称呼的简短兜底，绝不编造。
+模型结合人格与记忆背景生成，不写死模板。围观短评的定位是「坐在旁边
+的朋友」：优先发表自己的感受（惊叹/着急/心疼/吐槽），不复述画面内容，
+也不提帧率、CPU 占用这类性能数据；视觉描述层同样忽略这类监控信息。
+称呼是账号级的：私聊围观用该账号自己档案里设定的称呼（换账号换称呼，
+无全局称呼），群聊围观不带入私聊专属称呼；任何场景都禁止使用「主人」
+一词。LLM 失败时退回不含具体称呼的简短兜底，绝不编造。
 
 降级契约：截图/视觉失败只累计，连续超限自动收工并坦诚告知；
 评论生成失败本轮静默跳过；主动开启分类失败静默放弃，绝不编造。
@@ -45,9 +47,15 @@ _ADDRESS_RULE = (
 )
 
 _COMMENT_PROMPT = (
-    "对方正在{activity}，你正在围观对方的屏幕，当前看到的画面：{description}。"
-    "请以亚托莉的口吻发一条 40~80 字的围观短评：可以好奇、吐槽、鼓励，"
-    "或点评画面里的细节，但必须基于画面描述，不许编造画面里没有的内容。"
+    "对方正在{activity}，你正坐在旁边围观TA的屏幕。"
+    "{history}当前看到的画面：{description}。"
+    "请以亚托莉的口吻发一条 40~80 字的围观插话：像朋友看着对方操作一样，"
+    "结合最近几次看到的连续变化（进展、卡关、翻车、翻盘）来反应，"
+    "优先发表自己的感受——可以惊叹、着急、心疼、鼓励或吐槽"
+    "（比如「好难啊」「好菜啊」「这波可以」这类反应），"
+    "而不是复述画面里有什么。像真人旁观者那样说，不用句句工整。"
+    "不要提及帧率、CPU 占用这类电脑性能数据。"
+    "感受必须有画面依据，不许编造画面里没有的内容。"
     "直接输出评论文本，不要任何前缀、引号或解释。"
 )
 
@@ -231,11 +239,23 @@ def generate_commentary(
     description: str,
     persona_system: list[str],
     last_comment: str = "",
+    recent_history: list[str] | None = None,
 ) -> str:
-    """把屏幕描述包装成 ATRI 口吻的围观短评；失败返回空串（本轮静默跳过）。"""
-    prompt = _COMMENT_PROMPT.format(activity=activity, description=description)
+    """把屏幕描述包装成 ATRI 口吻的围观短评；失败返回空串（本轮静默跳过）。
+
+    ``recent_history`` 是本次围观内更早看到的画面描述（从早到近），
+    让评论对一段连续变化反应，而不是只盯着单帧。
+    """
+    history = ""
+    if recent_history:
+        joined = "；".join(str(text) for text in recent_history if str(text).strip())
+        if joined:
+            history = f"你最近几眼看到的画面（从早到近）：{joined}。"
+    prompt = _COMMENT_PROMPT.format(
+        activity=activity, history=history, description=description
+    )
     if last_comment:
-        prompt += f"你上一条评论是：「{last_comment}」，这次换个角度说。"
+        prompt += f"你上一条评论是：「{last_comment}」，这次换一种感受说。"
     prompt += _ADDRESS_RULE
     text = _chat_completion(
         config, persona_system, prompt, max_tokens=_COMMENT_MAX_TOKENS
@@ -355,6 +375,11 @@ def classify_activity(text: str, config: Any) -> dict[str, Any] | None:
 class WatchParty:
     """单会话围观状态机：tick 由 server 层的后台循环驱动。"""
 
+    # 滚动画面记忆：保留最近几眼的描述（时间 + 文本），评论时注入
+    # "从早到近"的连续变化，让旁观感受针对一段过程而非单帧。
+    _HISTORY_MAX_ENTRIES = 5
+    _HISTORY_WINDOW_SECONDS = 1800.0
+
     def __init__(
         self,
         config: Any,
@@ -376,6 +401,7 @@ class WatchParty:
         self.last_comment_text = ""
         self.comment_count = 0
         self.consecutive_failures = 0
+        self.recent_descriptions: list[tuple[float, str]] = []
         min_interval = max(
             30.0, float(getattr(config, "screen_watch_party_min_interval_seconds", 180.0) or 180.0)
         )
@@ -385,6 +411,18 @@ class WatchParty:
             cooldown=min_interval,
             backoff_max=max(360.0, min_interval * 2.0),
         )
+
+    def _remember_description(self, now: float, description: str) -> None:
+        if self.recent_descriptions and self.recent_descriptions[-1][1] == description:
+            # 画面描述与上一眼相同：只刷新时间，不重复占位。
+            self.recent_descriptions[-1] = (now, description)
+            return
+        self.recent_descriptions.append((now, description))
+        self.recent_descriptions = [
+            (ts, text)
+            for ts, text in self.recent_descriptions
+            if now - ts <= self._HISTORY_WINDOW_SECONDS
+        ][-self._HISTORY_MAX_ENTRIES :]
 
     def tick(self, now: float | None = None) -> dict[str, Any]:
         """执行一次围观采样，返回 comment/sensitive/skipped/failed_stop 等事件。"""
@@ -404,12 +442,16 @@ class WatchParty:
         if not description:
             self.consecutive_failures += 1
             return self._failure_result()
+        self._remember_description(now, description)
         text = generate_commentary(
             self.config,
             self.activity,
             description,
             self.persona_system,
             self.last_comment_text,
+            recent_history=[
+                text for _, text in self.recent_descriptions[:-1]
+            ],
         )
         if not text:
             # 评论生成失败本轮静默跳过；视觉是硬能力故不计入失败。
