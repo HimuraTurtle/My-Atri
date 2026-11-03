@@ -239,6 +239,152 @@ class TestVisionGuard:
         assert describe_screen(b"jpeg", config) == ""
 
 
+class TestScreenSheetVision:
+    """多帧拼图直传：网格合成、角标格式与三条降级路径。"""
+
+    def _frame(self, color: tuple[int, int, int]) -> bytes:
+        import io
+
+        from PIL import Image
+
+        buffer = io.BytesIO()
+        Image.new("RGB", (320, 180), color).save(buffer, format="JPEG", quality=90)
+        return buffer.getvalue()
+
+    def test_frame_label_formats_relative_time(self) -> None:
+        from atri_qq_bot.screen_watch.vision import _frame_label
+
+        assert _frame_label(1, 0.0) == "#1 now"
+        assert _frame_label(2, 42.0) == "#2 -42s"
+        assert _frame_label(3, 540.0) == "#3 -9m"
+        assert _frame_label(4, 7200.0) == "#4 -2h"
+        assert _frame_label(5, -5.0) == "#5 now"  # 时钟偏差防御为 now
+
+    def test_compose_sheet_builds_two_column_grid(self) -> None:
+        import io
+
+        from PIL import Image
+
+        from atri_qq_bot.screen_watch.vision import SHEET_GAP, compose_sheet
+
+        frames = [(1000.0, self._frame((255, 0, 0))), (1060.0, self._frame((0, 255, 0)))]
+        sheet = compose_sheet(frames, now=1060.0)
+        assert sheet
+        image = Image.open(io.BytesIO(sheet))
+        assert image.width == 320 * 2 + SHEET_GAP * 3
+        assert image.height == 180 + SHEET_GAP * 2
+        # 帧数不足两帧或为空 → None（拼图没有意义）
+        assert compose_sheet([], now=0.0) is None
+        assert compose_sheet([(1.0, self._frame((0, 0, 0)))], now=2.0) is None
+
+    def test_compose_sheet_pads_odd_frame_count_to_full_row(self) -> None:
+        import io
+
+        from PIL import Image
+
+        from atri_qq_bot.screen_watch.vision import SHEET_GAP, compose_sheet
+
+        frames = [
+            (1000.0, self._frame((255, 0, 0))),
+            (1060.0, self._frame((0, 255, 0))),
+            (1120.0, self._frame((0, 0, 255))),
+        ]
+        sheet = compose_sheet(frames, now=1120.0)
+        assert sheet
+        image = Image.open(io.BytesIO(sheet))
+        # 3 帧 → 2 行 2 列，末位留黑
+        assert image.width == 320 * 2 + SHEET_GAP * 3
+        assert image.height == 180 * 2 + SHEET_GAP * 3
+
+    def test_compose_sheet_returns_none_on_corrupt_jpeg(self) -> None:
+        from atri_qq_bot.screen_watch.vision import compose_sheet
+
+        frames = [(1000.0, self._frame((0, 0, 0))), (1060.0, b"not-a-jpeg")]
+        assert compose_sheet(frames, now=1060.0) is None
+
+    def test_compose_sheet_enforces_pixel_budget_on_fullres_frames(self) -> None:
+        import io
+
+        from PIL import Image
+
+        from atri_qq_bot.screen_watch.vision import SHEET_FRAME_WIDTH, compose_sheet
+
+        # 调用方误送全宽帧时，合成层仍把每帧压回拼图预算宽度。
+        buffer = io.BytesIO()
+        Image.new("RGB", (1920, 1080), (90, 60, 30)).save(
+            buffer, format="JPEG", quality=90
+        )
+        frames = [(1000.0, buffer.getvalue()), (1060.0, buffer.getvalue())]
+        sheet = compose_sheet(frames, now=1060.0)
+        assert sheet
+        image = Image.open(io.BytesIO(sheet))
+        assert image.width <= SHEET_FRAME_WIDTH * 2 + 24  # 2 列 + 间隙
+        assert image.height <= 700  # 1080→640 宽对应高约 360
+
+    def test_sheet_routes_single_frame_to_single_prompt(self, monkeypatch) -> None:
+        from atri_qq_bot.screen_watch import vision as vision_module
+
+        captured: list[tuple[str, bytes]] = []
+        monkeypatch.setattr(
+            vision_module,
+            "_describe_image",
+            lambda prompt, jpeg, config: (captured.append((prompt, jpeg)), "单帧描述")[1],
+        )
+        jpeg = self._frame((0, 0, 255))
+        assert vision_module.describe_screen_sheet([(1000.0, jpeg)], object()) == "单帧描述"
+        assert captured[0][0] is vision_module._SCREEN_PROMPT
+        assert captured[0][1] is jpeg
+
+    def test_sheet_uses_sheet_prompt_and_composed_image(self, monkeypatch) -> None:
+        import io
+
+        from PIL import Image
+
+        from atri_qq_bot.screen_watch import vision as vision_module
+
+        captured: list[tuple[str, bytes]] = []
+        monkeypatch.setattr(
+            vision_module,
+            "_describe_image",
+            lambda prompt, jpeg, config: (captured.append((prompt, jpeg)), "过程描述")[1],
+        )
+        frames = [
+            (1000.0, self._frame((255, 0, 0))),
+            (1090.0, self._frame((0, 255, 0))),
+            (1180.0, self._frame((0, 0, 255))),
+        ]
+        assert vision_module.describe_screen_sheet(frames, object()) == "过程描述"
+        prompt, sheet_jpeg = captured[0]
+        assert prompt is vision_module._SCREEN_SHEET_PROMPT
+        # 送入模型的是拼图（与任何单帧都不同），且可正常解码。
+        assert sheet_jpeg not in {jpeg for _, jpeg in frames}
+        Image.open(io.BytesIO(sheet_jpeg)).verify()
+
+    def test_sheet_falls_back_to_last_frame_when_compose_fails(self, monkeypatch) -> None:
+        from atri_qq_bot.screen_watch import vision as vision_module
+
+        captured: list[tuple[str, bytes]] = []
+        monkeypatch.setattr(vision_module, "compose_sheet", lambda frames, now: None)
+        monkeypatch.setattr(
+            vision_module,
+            "_describe_image",
+            lambda prompt, jpeg, config: (captured.append((prompt, jpeg)), "兜底描述")[1],
+        )
+        first = self._frame((255, 0, 0))
+        last = self._frame((0, 255, 0))
+        result = vision_module.describe_screen_sheet(
+            [(1000.0, first), (1090.0, last)], object()
+        )
+        assert result == "兜底描述"
+        assert captured[0][0] is vision_module._SCREEN_PROMPT
+        assert captured[0][1] is last
+
+    def test_sheet_empty_frames_returns_empty(self) -> None:
+        from atri_qq_bot.screen_watch.vision import describe_screen_sheet
+
+        assert describe_screen_sheet([], object()) == ""
+
+
 class TestWatcher:
     def _watcher(self, tmp_path: Path) -> ScreenWatcher:
         watcher = ScreenWatcher(
@@ -774,7 +920,7 @@ class TestWatchParty:
             party_module, "active_window_title", lambda: "记事本"
         )
         monkeypatch.setattr(
-            party_module, "describe_screen", lambda jpeg, config: "主人在文档里打字"
+            party_module, "describe_screen_sheet", lambda frames, config: "主人在文档里打字"
         )
         monkeypatch.setattr(
             party_module,
@@ -814,6 +960,8 @@ class TestWatchParty:
         assert party.tick(now=2001.0)["event"] == "idle"
         assert party.tick(now=2002.0)["event"] == "sensitive"
         assert party.comment_count == 0
+        # 敏感窗口在入帧之前打闸：画面字节绝不进滚动帧记忆（隐私红线）。
+        assert party.recent_frames == []
 
     def test_party_tick_failure_autostop(self, tmp_path: Path, monkeypatch):
         from atri_qq_bot.screen_watch import party as party_module
@@ -842,7 +990,7 @@ class TestWatchParty:
         monkeypatch.setattr(party_module, "capture_screen", lambda monitor=1: next(frames))
         monkeypatch.setattr(party_module, "active_window_title", lambda: "记事本")
         monkeypatch.setattr(
-            party_module, "describe_screen", lambda jpeg, config: "有人在写东西"
+            party_module, "describe_screen_sheet", lambda frames, config: "有人在写东西"
         )
         monkeypatch.setattr(
             party_module,
@@ -854,6 +1002,70 @@ class TestWatchParty:
         assert party.tick(now=4002.0)["event"] == "comment_failed"
         assert party.consecutive_failures == 0
         assert party.comment_count == 0
+
+    def test_party_frame_memory_trims_to_sheet_cap(self, tmp_path: Path) -> None:
+        from PIL import Image
+
+        party = self._party(tmp_path)
+        image = Image.new("RGB", (1920, 1080), (10, 20, 30))
+        for index in range(6):
+            party._remember_frame(1000.0 + index * 60.0, image)
+        # 拼图容量 4 帧：最旧的被挤掉
+        assert len(party.recent_frames) == 4
+        assert party.recent_frames[0][0] == 1000.0 + 2 * 60.0
+        # 30 分钟窗口外的帧全部丢弃，只留新入的
+        party._remember_frame(5000.0, image)
+        assert len(party.recent_frames) == 1
+        assert party.recent_frames[0][0] == 5000.0
+        # 存的是缩小后的 JPEG（供拼图直传），不是原始全宽截图
+        from atri_qq_bot.screen_watch.vision import SHEET_FRAME_WIDTH
+
+        import io
+
+        stored = Image.open(io.BytesIO(party.recent_frames[0][1]))
+        assert stored.width == SHEET_FRAME_WIDTH
+
+    def test_party_describe_failure_keeps_frame_for_next_sheet(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """第一眼描述失败后帧不丢：下次成功评论的拼图仍覆盖那个时刻。"""
+        from itertools import cycle
+
+        from PIL import Image
+
+        from atri_qq_bot.screen_watch import party as party_module
+
+        party = self._party(tmp_path)
+        frames = iter(
+            cycle(
+                [
+                    Image.new("RGB", (160, 90), (0, 0, 0)),
+                    Image.new("RGB", (160, 90), (255, 255, 255)),
+                ]
+            )
+        )
+        monkeypatch.setattr(party_module, "capture_screen", lambda monitor=1: next(frames))
+        monkeypatch.setattr(party_module, "active_window_title", lambda: "记事本")
+        results = iter(["", "两帧过程描述"])
+        sheet_sizes: list[int] = []
+        monkeypatch.setattr(
+            party_module,
+            "describe_screen_sheet",
+            lambda frames, config: (sheet_sizes.append(len(frames)), next(results))[1],
+        )
+        monkeypatch.setattr(
+            party_module,
+            "generate_commentary",
+            lambda config, activity, description, persona_system, last="", recent_history=None: "好难啊",
+        )
+        party.tick(now=1000.0)
+        party.tick(now=1001.0)
+        assert party.tick(now=1002.0)["event"] == "skipped"  # 描述失败
+        party.tick(now=1200.0)  # 重置基线后的第一帧：建立新基线
+        party.tick(now=1201.0)
+        assert party.tick(now=1202.0)["event"] == "comment"
+        # 失败那一眼的帧被保留：成功评论时拼图是两帧
+        assert sheet_sizes == [1, 2]
 
     def _server(self, tmp_path: Path) -> OneBotServer:
         config = _config(tmp_path)
@@ -1085,10 +1297,11 @@ class TestWatchParty:
         monkeypatch.setattr(party_module, "capture_screen", lambda monitor=1: next(frames))
         monkeypatch.setattr(party_module, "active_window_title", lambda: "记事本")
         descriptions = iter(["开局满血打Boss", "Boss血量见底团灭"])
+        sheet_calls: list[list[tuple[float, bytes]]] = []
         monkeypatch.setattr(
             party_module,
-            "describe_screen",
-            lambda jpeg, config: next(descriptions),
+            "describe_screen_sheet",
+            lambda frames, config: (sheet_calls.append(list(frames)), next(descriptions))[1],
         )
         calls: list[dict[str, object]] = []
 
@@ -1111,6 +1324,12 @@ class TestWatchParty:
         assert calls[0]["history"] == []
         assert calls[1]["history"] == ["开局满血打Boss"]
         assert calls[1]["description"] == "Boss血量见底团灭"
+        # 拼图直传：第一评只有当前一帧，第二评累积成两帧（含时间戳）。
+        assert len(sheet_calls[0]) == 1
+        assert len(sheet_calls[1]) == 2
+        assert sheet_calls[1][0][0] == 1002.0
+        assert sheet_calls[1][1][0] == 1201.0
+        assert isinstance(sheet_calls[1][0][1], bytes)
 
     def test_generated_replies_fallback_without_owner_title(
         self, tmp_path: Path, monkeypatch

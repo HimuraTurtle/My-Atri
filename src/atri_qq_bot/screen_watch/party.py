@@ -5,6 +5,10 @@
 机制天然承担。评论只发到开启围观的那个会话；结束由主人话语触发
 （宽松规则，宁可误停也不刷屏）。
 
+画面理解走「多帧拼图直传」：滚动保留最近几帧，评论前拼成一张
+带序号与相对时间角标的网格图，视觉模型一次看到一段时间的过程，
+替代单帧描述的文字瓶颈。
+
 所有对外回应（开启宣告、结束告别、围观短评、失败收工）都由主聊天
 模型结合人格与记忆背景生成，不写死模板。围观短评的定位是「坐在旁边
 的朋友」：优先发表自己的感受（惊叹/着急/心疼/吐槽），不复述画面内容，
@@ -30,7 +34,7 @@ from typing import Any
 from .capture import capture_screen, encode_jpeg, gray_small
 from .privacy import active_window_title, is_sensitive_title
 from .trigger import FrameTrigger
-from .vision import describe_screen
+from .vision import SHEET_FRAME_WIDTH, SHEET_MAX_FRAMES, describe_screen_sheet
 
 LOGGER = logging.getLogger("atri.screen_watch")
 
@@ -375,8 +379,8 @@ def classify_activity(text: str, config: Any) -> dict[str, Any] | None:
 class WatchParty:
     """单会话围观状态机：tick 由 server 层的后台循环驱动。"""
 
-    # 滚动画面记忆：保留最近几眼的描述（时间 + 文本），评论时注入
-    # "从早到近"的连续变化，让旁观感受针对一段过程而非单帧。
+    # 滚动画面记忆：帧（拼图直传视觉模型，看一段过程）与描述（注入评论
+    # 上下文的文字历史）双轨并行——帧保证"看得多"，描述保证"记得久"。
     _HISTORY_MAX_ENTRIES = 5
     _HISTORY_WINDOW_SECONDS = 1800.0
 
@@ -402,6 +406,7 @@ class WatchParty:
         self.comment_count = 0
         self.consecutive_failures = 0
         self.recent_descriptions: list[tuple[float, str]] = []
+        self.recent_frames: list[tuple[float, bytes]] = []
         min_interval = max(
             30.0, float(getattr(config, "screen_watch_party_min_interval_seconds", 180.0) or 180.0)
         )
@@ -424,6 +429,21 @@ class WatchParty:
             if now - ts <= self._HISTORY_WINDOW_SECONDS
         ][-self._HISTORY_MAX_ENTRIES :]
 
+    def _remember_frame(self, now: float, image: Any) -> None:
+        """把本帧缩小存入滚动帧记忆，评论时拼图直传视觉模型。
+
+        帧在视觉描述之前入记：即使本次描述失败，画面信息也不丢，
+        下次成功评论的拼图仍覆盖这个时刻。存 640 宽小图，
+        4 帧合计约几百 KB，内存开销可忽略。
+        """
+
+        self.recent_frames.append((now, encode_jpeg(image, width=SHEET_FRAME_WIDTH)))
+        self.recent_frames = [
+            (ts, jpeg)
+            for ts, jpeg in self.recent_frames
+            if now - ts <= self._HISTORY_WINDOW_SECONDS
+        ][-SHEET_MAX_FRAMES:]
+
     def tick(self, now: float | None = None) -> dict[str, Any]:
         """执行一次围观采样，返回 comment/sensitive/skipped/failed_stop 等事件。"""
         now = time.time() if now is None else now
@@ -437,7 +457,10 @@ class WatchParty:
         if is_sensitive_title(title):
             self.trigger.reset_baseline()
             return {"event": "sensitive", "window_title": title}
-        description = describe_screen(encode_jpeg(image), self.config)
+        # 帧先入记忆再描述：敏感标题检查已通过，本帧画面可保留；
+        # 描述失败时画面信息也不丢，下次拼图仍覆盖这个时刻。
+        self._remember_frame(now, image)
+        description = describe_screen_sheet(list(self.recent_frames), self.config)
         self.trigger.reset_baseline()
         if not description:
             self.consecutive_failures += 1

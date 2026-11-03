@@ -16,7 +16,7 @@ from .party import WatchParty
 from .privacy import PauseFlag, active_window_title, is_sensitive_title
 from .store import ScreenWatchStore
 from .trigger import FrameTrigger
-from .vision import describe_screen
+from .vision import compose_sheet, describe_screen, describe_screen_sheet
 from .watcher import ScreenWatcher
 
 __all__ = [
@@ -29,6 +29,8 @@ __all__ = [
     "is_sensitive_title",
     "ScreenWatchStore",
     "FrameTrigger",
+    "compose_sheet",
     "describe_screen",
+    "describe_screen_sheet",
     "ScreenWatcher",
 ]
