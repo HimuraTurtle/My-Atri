@@ -46,6 +46,9 @@ from ..runtime.services import ensure_ollama_service, release_ollama_model
 
 
 PERSONA_PROMPT = load_prompt("atri_persona")
+# 说话方式规范优先于人格核心的语言手感（文档内已声明优先级），
+# 跟随人格一起注入所有开口场景：主聊天、主动消息、围观评论。
+SPEECH_STYLE_PROMPT = load_prompt("speech_style")
 LOGGER = logging.getLogger("atri.persona")
 
 

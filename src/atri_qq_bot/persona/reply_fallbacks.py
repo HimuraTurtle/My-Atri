@@ -36,16 +36,23 @@ from .reply_rules import (
 )
 
 def _trim_extra_questions(text: str, keep_questions: int = 1) -> str:
-    sentences = _split_sentences(text)
-    kept: list[str] = []
+    # 逐行修剪：多行分条形态（每行一条消息）下行边界必须保留，
+    # 不能把两行问题粘成一行；无换行输入与旧逻辑等价。
+    lines = [line for line in str(text or "").split("\n") if line.strip()]
+    kept_lines: list[str] = []
     questions = 0
-    for sentence in sentences:
-        if "?" in sentence or "？" in sentence:
-            questions += 1
-            if questions > keep_questions:
-                continue
-        kept.append(sentence)
-    return "".join(kept).strip() or text
+    for line in lines:
+        kept_sentences: list[str] = []
+        for sentence in _split_sentences(line):
+            if "?" in sentence or "？" in sentence:
+                questions += 1
+                if questions > keep_questions:
+                    continue
+            kept_sentences.append(sentence)
+        kept_line = "".join(kept_sentences).strip()
+        if kept_line:
+            kept_lines.append(kept_line)
+    return "\n".join(kept_lines).strip() or text
 
 
 def _split_sentences(text: str) -> list[str]:
@@ -75,7 +82,7 @@ def _direct_suggestion_fallback(user_text: str) -> str:
 
 def _stance_fallback(user_text: str) -> str:
     if any(word in user_text for word in ("对吗", "对不对", "这样做")):
-        return "我先站个明确观点：如果这件事会让你长期委屈自己，我不赞成；如果只是短期麻烦但对你有好处，我支持你试。哼，我偏心主人，但不会无脑点头。"
+        return "我先站个明确观点：如果这件事会让你长期委屈自己，我不赞成；如果只是短期麻烦但对你有好处，我支持你试。哼，我是有偏心的，但不会无脑点头。"
     if any(word in user_text for word in ("要不要", "该不该", "值不值得")):
         return "我的态度是：别为了逃避焦虑才选，也别为了逞强硬扛。能让你更接近目标、代价又可控，就做；只会消耗你，就不要。"
     if "能不能" in user_text:
@@ -145,6 +152,18 @@ def _repair_incomplete_reply(text: str) -> str:
         return ""
     if not _looks_incomplete_reply(compact):
         return compact
+
+    # 多行分条形态（说话方式：每行一条消息）下，未完成只可能是末行：
+    # 前面的行是已发出的独立短消息，不能因为末行截断被整段丢弃。
+    if "\n" in compact:
+        lines = [line for line in compact.split("\n") if line.strip()]
+        while lines and _looks_incomplete_reply(lines[-1]):
+            lines.pop()
+        if lines:
+            return "\n".join(lines)
+        # 全部行都不完整：压回单段文本，交回单行修复路径处理。
+        joined = "".join(line.strip() for line in compact.split("\n") if line.strip())
+        return _repair_incomplete_reply(joined)
 
     # Prefer an already completed sentence over inventing a continuation.
     boundary = max(compact.rfind(mark) for mark in ("。", "！", "？", "!", "?"))

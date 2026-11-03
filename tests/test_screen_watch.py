@@ -1271,9 +1271,23 @@ class TestWatchParty:
         prompt = str(calls[-1]["prompt"])
         assert "从早到近" in prompt
         assert "开局满血打Boss" in prompt
-        assert "Boss血量见底" in prompt
-        assert "团灭结算画面" in prompt
-        assert prompt.index("开局满血打Boss") < prompt.index("团灭结算画面")
+
+    def test_party_comment_folds_multiline_output_into_single_message(
+        self, tmp_path: Path, monkeypatch
+    ) -> None:
+        """围观插话是一条说完的短消息：模型多行输出折叠，不分行发送。"""
+        from atri_qq_bot.screen_watch import party as party_module
+
+        monkeypatch.setattr(
+            party_module,
+            "_chat_completion",
+            lambda config, persona_system, prompt, *, max_tokens: "草\n这都行\n好家伙",
+        )
+        config = _config(tmp_path)
+        comment = party_module.generate_commentary(
+            config, "打游戏", "打到最终Boss血量见底", ["人格"]
+        )
+        assert comment == "草 这都行 好家伙"
 
     def test_party_tick_feeds_history_into_commentary(
         self, tmp_path: Path, monkeypatch
@@ -1391,7 +1405,7 @@ class TestWatchParty:
 
     def test_party_persona_system_layers(self, tmp_path: Path):
         from atri_qq_bot.group_chat import GROUP_PROMPT
-        from atri_qq_bot.persona.core import PERSONA_PROMPT
+        from atri_qq_bot.persona.core import PERSONA_PROMPT, SPEECH_STYLE_PROMPT
 
         server = self._server(tmp_path)
         server.reply_engine = SimpleNamespace(
@@ -1408,7 +1422,8 @@ class TestWatchParty:
         # 私聊围观：称呼是账号级的，只注入该账号自己的档案。
         systems = server._party_persona_system("private:2578607322")
         assert systems[0] == PERSONA_PROMPT
-        assert "用户希望被叫作父亲" in systems[1]
+        assert systems[1] == SPEECH_STYLE_PROMPT
+        assert "用户希望被叫作父亲" in systems[2]
         assert any("禁止" in text and "「主人」" in text for text in systems)
 
         # 换一个账号：称呼随档案变，不继承其他账号的称呼。
@@ -1419,7 +1434,8 @@ class TestWatchParty:
         # 群聊围观：不注入任何人的私聊档案，私聊专属称呼不得带进群聊。
         systems_group = server._party_persona_system("group:110866825")
         assert systems_group[0] == PERSONA_PROMPT
-        assert systems_group[1] == GROUP_PROMPT
+        assert systems_group[1] == SPEECH_STYLE_PROMPT
+        assert systems_group[2] == GROUP_PROMPT
         assert all(
             "用户希望被叫作父亲" not in text and "另一个账号的背景" not in text
             for text in systems_group

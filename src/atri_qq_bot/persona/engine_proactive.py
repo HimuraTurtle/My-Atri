@@ -92,6 +92,8 @@ class EngineProactiveMixin(PersonaEngineMixin):
         )
         messages = [
             {"role": "system", "content": PERSONA_PROMPT},
+            # 主动消息也是开口，说话方式规范同样生效（短句、不客服腔）。
+            {"role": "system", "content": SPEECH_STYLE_PROMPT},
             {"role": "system", "content": LANGUAGE_GUARD_PROMPT},
             {"role": "user", "content": prompt},
         ]

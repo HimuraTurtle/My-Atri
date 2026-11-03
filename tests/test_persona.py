@@ -1,8 +1,10 @@
 import asyncio
+from pathlib import Path
 
 import pytest
 
 from atri_qq_bot.config import BotConfig, load_config
+from atri_qq_bot.prompting import load_prompt
 from atri_qq_bot.persona import (
     AtriReplyEngine,
     _group_fallback_reply,
@@ -18,6 +20,176 @@ from atri_qq_bot.toolbox import ToolAnalysisResult
 
 def assert_model_unavailable(reply: str) -> None:
     assert reply == ""
+
+
+def test_speech_style_prompt_loads_and_declares_priority_over_persona() -> None:
+    from atri_qq_bot.persona.core import PERSONA_PROMPT, SPEECH_STYLE_PROMPT
+
+    assert SPEECH_STYLE_PROMPT
+    assert SPEECH_STYLE_PROMPT is not PERSONA_PROMPT
+    # 关键锚点：分条机制与双轨优先级声明缺失时说话方式层等于没接上。
+    assert "每行一条" in SPEECH_STYLE_PROMPT
+    assert "1~20 字" in SPEECH_STYLE_PROMPT
+    # 开口形态归本节，性格与价值冲突归人格核心（文本蒸馏）。
+    assert "以人格核心为准" in SPEECH_STYLE_PROMPT
+    # 直率红线不被圆滑规则覆盖：她天然直球，不当老好人。
+    assert "别当第一个反驳的人" not in SPEECH_STYLE_PROMPT
+    assert "天然直球" in SPEECH_STYLE_PROMPT
+    # 原作式抗议资产接入说话方式（分级抗议/法条卡壳/火箭拳）。
+    assert "机器人保护法" in SPEECH_STYLE_PROMPT
+    # 人格侧同步让位：语言手感不再自定问号/emoji 全面禁令。
+    assert "疑惑时可以用单独一个" not in PERSONA_PROMPT
+
+
+def test_active_fallback_replies_never_use_owner_title() -> None:
+    """活跃兜底路径不得出现「主人」：非 owner 用户也会收到这些文案。"""
+    from atri_qq_bot.persona.reply_fallbacks import (
+        _stance_fallback,
+    )
+
+    for user_text in ("这样做对吗", "该不该去", "能不能做"):
+        assert "主人" not in _stance_fallback(user_text)
+
+
+def test_single_message_scenes_lock_no_multiline() -> None:
+    """单条语义场景与分条规范不冲突：主动消息与 qzone 文案锁死「不要换行」。
+
+    这些场景的传输层整段直发（不 split_reply_text），提示词若允许换行
+    会发出带换行的整段文本而非多条消息。
+    """
+    proactive = load_prompt("proactive")
+    assert "只输出最终要发送的一条" in proactive
+    assert "不要换行" in proactive
+
+    source = (
+        Path(__file__).resolve().parents[1]
+        / "src"
+        / "atri_qq_bot"
+        / "onebot"
+        / "server_parts"
+        / "server_qzone.py"
+    ).read_text(encoding="utf-8")
+    assert "不要换行、不要分条" in source
+
+
+def test_idle_nudge_candidates_never_use_owner_title(
+    tmp_path, monkeypatch
+) -> None:
+    """久未回复提醒发给任意到期会话：全部候选文案都不得含「主人」。"""
+    import random as random_module
+
+    config = BotConfig(
+        bot_qq=100000001,
+        host="127.0.0.1",
+        port=8765,
+        reply_mode="smart",
+        openai_api_key="test-key",
+        openai_base_url="https://example.test/v1",
+        openai_model="test-model",
+        temperature=0.4,
+        max_tokens=180,
+        memory_path=tmp_path / "memory.json",
+        llm_tools_enabled=False,
+    )
+    engine = AtriReplyEngine(config)
+    captured: dict[str, list[str]] = {}
+
+    original_choice = random_module.choice
+
+    def capture_all(seq):
+        captured["candidates"] = list(seq)
+        return original_choice(seq)
+
+    monkeypatch.setattr(
+        "atri_qq_bot.persona.engine_state.random.choice", capture_all
+    )
+    engine.idle_nudge_text("private:10001")
+
+    assert captured["candidates"]
+    assert all("主人" not in text for text in captured["candidates"])
+
+
+def test_repair_incomplete_reply_keeps_complete_lines_when_tail_is_cut() -> None:
+    from atri_qq_bot.persona.reply_fallbacks import _repair_incomplete_reply
+
+    # 末行截断（以逗号结尾）：只丢末行，前面的完整短消息保留。
+    assert _repair_incomplete_reply("草\n这都行\n然后，") == "草\n这都行"
+    # 没有截断迹象的多行碎片（故意的不完整句）原样通过。
+    assert _repair_incomplete_reply("不对，其实\n算了不说了") == "不对，其实\n算了不说了"
+
+
+def test_trim_extra_questions_preserves_line_boundaries() -> None:
+    from atri_qq_bot.persona.reply_fallbacks import _trim_extra_questions
+
+    assert (
+        _trim_extra_questions("好家伙\n你认真的？\n还是开玩笑？")
+        == "好家伙\n你认真的？"
+    )
+    # 无换行输入行为不变。
+    assert _trim_extra_questions("第一问？第二问？") == "第一问？"
+
+
+def test_needs_rewrite_allows_single_word_reactions_but_rejects_punct_only() -> None:
+    from collections import defaultdict, deque
+
+    from atri_qq_bot.persona.engine_context import EngineContextMixin
+
+    class Probe(EngineContextMixin):
+        def __init__(self) -> None:
+            self._recent_replies: defaultdict[str, deque[str]] = defaultdict(
+                lambda: deque(maxlen=8)
+            )
+
+        def probe(self, reply_text: str) -> bool:
+            return self._needs_rewrite("private:1", "哈哈", reply_text)
+
+    probe = Probe()
+    assert probe.probe("6") is False
+    assert probe.probe("草") is False
+    assert probe.probe("？") is True
+    assert probe.probe("") is True
+
+
+def test_reply_with_api_injects_speech_style_right_after_persona(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    config = BotConfig(
+        bot_qq=100000001,
+        host="127.0.0.1",
+        port=8765,
+        reply_mode="smart",
+        openai_api_key="test-key",
+        openai_base_url="http://127.0.0.1:11434/v1",
+        openai_model="qwen3:4b-instruct",
+        temperature=0.7,
+        max_tokens=350,
+        memory_path=tmp_path / "memory.json",
+        llm_tools_enabled=False,
+    )
+    engine = AtriReplyEngine(config)
+    captured: dict[str, object] = {}
+
+    async def fake_post(client, headers, payload):
+        captured.update(payload)
+        return {"choices": [{"message": {"content": "草\n这都行"}}]}
+
+    monkeypatch.setattr(engine, "_post_chat_completion", fake_post)
+
+    reply = asyncio.run(
+        engine._reply_with_api("private:10001", "哈哈这操作", None)
+    )
+
+    assert reply
+    from atri_qq_bot.persona.core import PERSONA_PROMPT, SPEECH_STYLE_PROMPT
+
+    messages = captured["messages"]
+    assert messages[0]["content"] == PERSONA_PROMPT
+    assert messages[1]["content"] == SPEECH_STYLE_PROMPT
+    # 语言护栏仍在说话方式之后，分层不被挤掉。
+    from atri_qq_bot.persona.core import LANGUAGE_GUARD_PROMPT
+
+    assert messages[2]["content"] == LANGUAGE_GUARD_PROMPT
 
 
 def test_final_reply_rejects_unfinished_ellipsis_and_redacts_group_secrets(tmp_path) -> None:

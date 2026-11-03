@@ -8,19 +8,24 @@ def split_reply_text(text: str, max_chars: int = 44, max_parts: int = 4) -> list
     if not text:
         return []
 
-    raw_sentences = _sentence_chunks(text)
-    pieces: list[str] = []
-    for sentence in raw_sentences:
-        pieces.extend(_hard_wrap(sentence, max_chars))
-
+    # 模型主动换行 = 想分条发送（说话方式规范：每行一条消息）。
+    # 行与行之间绝不合并；行内的多个短句仍可合并成一条。
+    lines = [line.strip() for line in text.split("\n") if line.strip()]
     merged: list[str] = []
-    for piece in pieces:
-        if not piece:
-            continue
-        if merged and len(merged[-1]) + len(piece) <= max_chars and not _ends_with_strong_punctuation(merged[-1]):
-            merged[-1] = f"{merged[-1]}{piece}"
-        else:
-            merged.append(piece)
+    for line in lines:
+        line_start = len(merged)
+        for sentence in _sentence_chunks(line):
+            for piece in _hard_wrap(sentence, max_chars):
+                if not piece:
+                    continue
+                if (
+                    len(merged) > line_start
+                    and len(merged[-1]) + len(piece) <= max_chars
+                    and not _ends_with_strong_punctuation(merged[-1])
+                ):
+                    merged[-1] = f"{merged[-1]}{piece}"
+                else:
+                    merged.append(piece)
 
     if len(merged) <= max_parts:
         return merged

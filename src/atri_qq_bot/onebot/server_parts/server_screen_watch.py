@@ -27,7 +27,7 @@ from typing import Any
 from ...bilibili.parsing import strip_address_prefix
 from ...group_chat import GROUP_PROMPT
 from ...message_plan import OutgoingMessage
-from ...persona.core import PERSONA_PROMPT
+from ...persona.core import PERSONA_PROMPT, SPEECH_STYLE_PROMPT
 from ...screen_watch import ScreenWatcher, WatchParty
 from ...screen_watch.party import (
     classify_activity,
@@ -320,7 +320,7 @@ class OneBotScreenWatchMixin(OneBotServerMixin):
         不得带进群聊，用平等群友口吻。渲染失败时静默退化为仅人格
         提示词，绝不让围观链路断掉。
         """
-        systems = [PERSONA_PROMPT]
+        systems = [PERSONA_PROMPT, SPEECH_STYLE_PROMPT]
         if str(conversation_id or "").startswith("group:"):
             systems.append(GROUP_PROMPT)
             systems.append(

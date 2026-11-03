@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from .engine_support import PersonaEngineMixin
 
 
@@ -150,7 +152,10 @@ class EngineContextMixin(PersonaEngineMixin):
         )
 
     def _needs_rewrite(self, conversation_id: str, user_text: str, reply_text: str) -> bool:
-        if not reply_text or len(reply_text.strip()) < 2:
+        stripped = str(reply_text or "").strip()
+        # 说话方式允许单字反应（“6”“草”“乐”）：只拦空白与纯标点，
+        # 有实义字符的短回复交给后续质量检查与复读检测。
+        if not stripped or not re.search(r"[\w\u4e00-\u9fff]", stripped):
             return True
 
         if _persona_violations(user_text, reply_text):

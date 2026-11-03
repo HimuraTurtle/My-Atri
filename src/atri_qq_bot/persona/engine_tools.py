@@ -134,6 +134,9 @@ class EngineToolsMixin(PersonaEngineMixin):
         # 这是普通聊天出现前言不搭后语的主要回归来源之一。
         messages = [
             {"role": "system", "content": PERSONA_PROMPT},
+            # 说话方式紧随人格注入：短句碎片、分条节奏与语气规范
+            # 优先于人格核心的语言手感，是“怎么开口”的最终裁定层。
+            {"role": "system", "content": SPEECH_STYLE_PROMPT},
             {"role": "system", "content": LANGUAGE_GUARD_PROMPT},
         ]
         identity_context_needed = _needs_identity_context(user_text)

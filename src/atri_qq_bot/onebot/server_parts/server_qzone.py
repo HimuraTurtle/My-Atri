@@ -112,6 +112,7 @@ class OneBotQzoneMixin(OneBotServerMixin):
             "你现在在为 QQ 空间自动互动生成文案。你是亚托莉，必须保持当前项目已配置的人格、记忆和情绪状态。"
             f"请根据用户提示生成一条{kind_text}，只输出可以直接发布的{kind_text}正文，"
             "不要解释、不要加引号、不要写『提示词』或『生成结果』，不得使用「主人」称呼。"
+            f"{kind_text}是一条说完的文本：不要换行、不要分条。"
             + (
                 f"{kind_text}控制在 1-80 字，自然、像真人评论。"
                 if is_comment

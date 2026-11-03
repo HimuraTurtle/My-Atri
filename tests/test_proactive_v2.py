@@ -370,3 +370,12 @@ def test_group_generation_uses_public_group_context_and_guides_topic(
     assert "最近怎么样" in prompt
     assert "近期关键词" not in prompt
     assert "只有标记为“用户”的原话" in prompt
+    # 说话方式规范也注入主动消息：开口短碎、不客服腔。
+    from atri_qq_bot.persona.core import SPEECH_STYLE_PROMPT
+
+    system_contents = [
+        str(message.get("content") or "")
+        for message in captured["messages"]
+        if message.get("role") == "system"
+    ]
+    assert SPEECH_STYLE_PROMPT in system_contents

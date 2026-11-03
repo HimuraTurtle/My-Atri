@@ -5,6 +5,7 @@
 ## 文件分层
 
 - `atri_persona.md`：亚托莉人格、说话风格、原作背景和角色边界。
+- `speech_style.md`：说话方式总规范——短句碎片、分条节奏、语气、高情商接话与 AI 味黑名单，优先于人格核心的语言手感。
 - `reply_contract.md`：回复长度、隐私、事实性和失败兜底规则。
 - `language_guard.md`：输出语言和格式检查规则。
 - `language_retry.md`：语言漂移或乱码时的重试规则。

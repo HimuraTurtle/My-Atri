@@ -38,6 +38,40 @@ def test_split_reply_text_never_truncates_the_final_thought() -> None:
     assert not parts[-1].endswith(("...", "…"))
 
 
+def test_split_reply_text_keeps_model_line_breaks_as_message_boundaries() -> None:
+    text = "草\n这都行\n好家伙"
+
+    parts = split_reply_text(text, max_chars=44, max_parts=4)
+
+    assert parts == ["草", "这都行", "好家伙"]
+
+
+def test_split_reply_text_still_merges_fragments_within_one_line() -> None:
+    text = "草，这都行，好家伙"
+
+    parts = split_reply_text(text, max_chars=44, max_parts=4)
+
+    assert parts == ["草，这都行，好家伙"]
+
+
+def test_split_reply_text_merges_within_line_but_not_across_lines() -> None:
+    text = "草，这都行\n但换行就是想另发一条"
+
+    parts = split_reply_text(text, max_chars=44, max_parts=4)
+
+    assert parts == ["草，这都行", "但换行就是想另发一条"]
+
+
+def test_split_reply_text_caps_multi_line_replies_without_truncation() -> None:
+    text = "一\n二\n三\n四\n五"
+
+    parts = split_reply_text(text, max_chars=44, max_parts=3)
+
+    assert len(parts) == 3
+    assert "".join(parts) == text.replace("\n", "")
+    assert parts[0] == "一" and parts[1] == "二" and parts[2] == "三四五"
+
+
 def test_empty_reply_plan_stays_silent_without_template() -> None:
     manager = StickerManager(Path("data/stickers"), Path("data/stickers/triggers.json"))
     config = SimpleNamespace(
