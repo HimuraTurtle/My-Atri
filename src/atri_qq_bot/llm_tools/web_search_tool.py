@@ -67,29 +67,29 @@ async def search_web(arguments: dict[str, Any] | None = None, config: Any | None
                         research_results,
                         config,
                     )
-            if _bocha_enabled(config):
+            if _deepseek_enabled(config):
                 try:
-                    bocha_results = await _search_bocha(
+                    deepseek_results = await _search_deepseek(
                         client,
                         query,
                         mode,
                         max_results,
-                        str(getattr(config, "bocha_api_key", "") or ""),
+                        str(getattr(config, "deepseek_search_api_key", "") or ""),
                         domains=domains,
                     )
-                    if bocha_results:
+                    if deepseek_results:
                         return format_search_results(
                             query,
-                            bocha_results,
-                            source_name="博查AI搜索",
+                            deepseek_results,
+                            source_name="DeepSeek 自研搜索",
                             mode=mode,
                             domains=domains,
                             summary_limit=420,
                         )
-                    errors.append("博查AI搜索: 没有结果")
+                    errors.append("DeepSeek 自研搜索: 没有结果")
                 except Exception as exc:
-                    # 博查失败（欠费/超时/网络）不阻断回复，退回免费 RSS 链。
-                    errors.append(f"博查AI搜索: {_short_error(exc)}")
+                    # DeepSeek 失败（欠费/超时/网络）不阻断回复，退回免费 RSS 链。
+                    errors.append(f"DeepSeek 自研搜索: {_short_error(exc)}")
             for source_name, url in _search_sources(effective_query, mode):
                 try:
                     response = await client.get(url, headers=_request_headers())
@@ -308,36 +308,71 @@ def parse_news_rss(text: str, max_results: int = DEFAULT_SEARCH_MAX_RESULTS) -> 
     return results
 
 
-def _bocha_enabled(config: Any) -> bool:
+def _deepseek_enabled(config: Any) -> bool:
     provider = str(getattr(config, "search_provider", "auto") or "auto").strip().casefold()
-    if provider not in {"auto", "bocha"}:
+    if provider not in {"auto", "deepseek"}:
         return False
-    return bool(str(getattr(config, "bocha_api_key", "") or "").strip())
+    return bool(str(getattr(config, "deepseek_search_api_key", "") or "").strip())
 
 
-# 博查 freshness 分级：时敏词越强窗口越窄，避免"最近/今天"类查询
-# 拿到陈旧资料后模型只能说"信息滞后"。
+# 时效分级：时敏词越强窗口越窄，避免"最近/今天"类查询拿到陈旧资料
+# 后模型只能说"信息滞后"。窗口映射为 DeepSeek 的 after: 日期语法。
 _FRESHNESS_ONE_DAY_RE = re.compile(r"今天|今日|现在|此刻|刚刚|昨晚|昨夜|今晚|实时")
 _FRESHNESS_ONE_WEEK_RE = re.compile(r"最近|最新|本周|这周|近况|近日|近来|新闻|时事|热点|上新|新出|新番")
 _FRESHNESS_ONE_YEAR_RE = re.compile(r"今年|去年|年内")
 
+_TZ_BEIJING = timezone(timedelta(hours=8))
 
-def _bocha_freshness(mode: str, query: str) -> str | None:
-    """按查询词的时间敏感度选博查时效窗口；普通网页查询不加过滤。"""
+
+def _search_after_date(mode: str, query: str, now: datetime | None = None) -> str | None:
+    """按查询词的时间敏感度返回 after: 日期；普通网页查询不加过滤。"""
 
     text = str(query or "")
+    current = now or datetime.now(_TZ_BEIJING)
     if _FRESHNESS_ONE_DAY_RE.search(text):
-        return "oneDay"
+        return current.strftime("%Y-%m-%d")
     if mode != "news":
         return None
     if _FRESHNESS_ONE_WEEK_RE.search(text):
-        return "oneWeek"
+        return (current - timedelta(days=7)).strftime("%Y-%m-%d")
     if _FRESHNESS_ONE_YEAR_RE.search(text):
-        return "oneYear"
-    return "oneMonth"
+        return (current - timedelta(days=365)).strftime("%Y-%m-%d")
+    return (current - timedelta(days=30)).strftime("%Y-%m-%d")
 
 
-async def _search_bocha(
+def _deepseek_query(
+    query: str,
+    mode: str,
+    domains: list[str] | None = None,
+    now: datetime | None = None,
+) -> str:
+    """把搜索意图编译成 DeepSeek 支持的搜索语法（site:/lang:/after:）。"""
+
+    parts = [str(query or "").strip()]
+    if domains:
+        parts.append(" OR ".join(f"site:{domain}" for domain in domains))
+    if mode == "news":
+        parts.append("lang:zh")
+    after = _search_after_date(mode, query, now=now)
+    if after:
+        parts.append(f"after:{after}")
+    return " ".join(part for part in parts if part)
+
+
+def _format_utc_date(value: Any) -> str:
+    """RFC3339 UTC 日期转北京时间可读格式；解析失败原样返回。"""
+
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    return parsed.astimezone(_TZ_BEIJING).strftime("%Y-%m-%d %H:%M")
+
+
+async def _search_deepseek(
     client: Any,
     query: str,
     mode: str,
@@ -345,56 +380,55 @@ async def _search_bocha(
     api_key: str,
     domains: list[str] | None = None,
 ) -> list[dict[str, str]]:
-    """博查 Web Search API：语义检索 + AI 正文摘要，中文质量远高于 RSS。
+    """DeepSeek Search API：自研搜索引擎 + 面向模型的 summary，按次计费。
 
+    每条结果带 rerank_score（0~3 相关度）与 authority（0~4 权威度），
+    质量信号随 source_type 注入，帮助模型识别优质证据。
     失败直接抛异常，由调用方退回免费 RSS 链，保证搜索能力永不中断。
     """
 
-    payload: dict[str, Any] = {
-        "query": query,
-        "summary": True,
-        "count": max(1, min(8, max_results)),
-        "page": 1,
-    }
-    if domains:
-        payload["include"] = "|".join(domains)
-    freshness = _bocha_freshness(mode, query)
-    if freshness:
-        payload["freshness"] = freshness
+    compiled = _deepseek_query(query, mode, domains)
     response = await client.post(
-        "https://api.bochaai.com/v1/web-search",
+        "https://api.deepseek.com/v1/tools/search",
         headers={
             "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
         },
-        json=payload,
+        json={
+            "query": compiled,
+            "count": max(1, min(8, max_results)),
+            "need_content": False,
+            "ori_question": str(query or "").strip()[:128],
+        },
     )
     response.raise_for_status()
     body = response.json()
-    # 博查把结果包在 data 字段下；兼容直接顶层的旧格式。
-    data = body.get("data") if isinstance(body.get("data"), dict) else body
-    pages = data.get("webPages") or {}
-    values = pages.get("value") or []
+    values = body.get("results") if isinstance(body, dict) else None
     results: list[dict[str, str]] = []
-    for item in values:
+    for item in values or []:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("name") or "").strip()
+        title = str(item.get("title") or "").strip()
         url = str(item.get("url") or "").strip()
         if not title or not url:
             continue
-        summary = str(item.get("summary") or item.get("snippet") or "").strip()
+        quality: list[str] = []
+        score = item.get("rerank_score")
+        if isinstance(score, (int, float)):
+            quality.append(f"相关度 {score:.1f}/3")
+        authority = item.get("authority")
+        if isinstance(authority, int) and authority >= 0:
+            quality.append(f"权威度 {authority}/4")
+        source_type = "DeepSeek 自研搜索引擎的网页摘要，可直接作为证据使用"
+        if quality:
+            source_type += f"（{'、'.join(quality)}）"
         results.append(
             {
                 "title": title,
                 "url": url,
-                "published_at": str(item.get("datePublished") or ""),
-                "summary": summary,
-                "source_type": (
-                    "博查AI提取的网页正文摘要，可直接作为证据使用"
-                    if summary
-                    else "一般网页/媒体摘要，需结合原文判断"
-                ),
+                "published_at": _format_utc_date(item.get("date")),
+                "summary": str(item.get("summary") or item.get("snippet") or "").strip(),
+                "source_type": source_type,
             }
         )
         if len(results) >= max(1, max_results):

@@ -17,7 +17,7 @@ from .web_search_tool import search_web
 LOGGER = logging.getLogger(__name__)
 
 
-# 纯问候/纯语气消息不值得占用一次搜索（博查按次计费、RSS 也有延迟），
+# 纯问候/纯语气消息不值得占用一次搜索（DeepSeek Search 按次计费、RSS 也有延迟），
 # 全等匹配保证不误伤包含实际内容的句子。
 _TRIVIAL_MESSAGES = {
     "早上好",
@@ -72,8 +72,9 @@ _QUERY_FILLER_RE = re.compile(
     r"能不能|能不能给我|可以给我|给我看看|给我)"
 )
 
-# 时敏消息标记：这类查询要的是近期发生的事，走 news 模式让博查加
-# 时效过滤、RSS 兜底也优先新闻源，避免注入陈旧资料后模型说"信息滞后"。
+# 时敏消息标记：这类查询要的是近期发生的事，走 news 模式让 DeepSeek 加
+# after: 时效过滤与 lang:zh，RSS 兜底也优先新闻源，避免注入陈旧资料后
+# 模型说"信息滞后"。
 _NEWS_MODE_RE = re.compile(
     r"最近|最新|今天|今日|现在|此刻|刚刚|昨晚|昨夜|今晚|本周|这周|"
     r"近况|近日|近来|新闻|时事|热点|新出|上新|新番|实时|当下|今年|去年"
@@ -144,7 +145,7 @@ def proactive_search_gate(user_text: str, config: Any) -> bool:
 
 
 def _search_mode_for(user_text: str) -> str:
-    """时敏消息走 news 模式（博查时效过滤 + 新闻源优先），其余 auto。"""
+    """时敏消息走 news 模式（DeepSeek 时效过滤 + 新闻源优先），其余 auto。"""
 
     return "news" if _NEWS_MODE_RE.search(str(user_text or "")) else "auto"
 

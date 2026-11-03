@@ -5,9 +5,9 @@
 则直接 import AstrBot 内部的 _tavily_search。本模块把三者替换为：
 - llm_generate → ATRi 的 OpenAI 兼容接口（openai_base_url/model/api_key），
   返回带 completion_text 属性的响应对象；
-- get_config → 固定返回带假 tavily key 的配置，由 bocha_api_key 是否
-  存在决定搜索开关；
-- tavily_search → Bocha Web Search API，返回带 title/url/snippet 的
+- get_config → 固定返回带假 tavily key 的配置，由 deepseek_search_api_key
+  是否存在决定搜索开关；
+- tavily_search → DeepSeek Search API，返回带 title/url/snippet 的
   结果对象列表（与 tavily 返回结构对齐）。
 """
 
@@ -21,7 +21,7 @@ import httpx
 
 LOGGER = logging.getLogger("atri.anima.compat")
 
-_BOCHA_ENDPOINT = "https://api.bochaai.com/v1/web-search"
+_DEEPSEEK_SEARCH_ENDPOINT = "https://api.deepseek.com/v1/tools/search"
 
 
 @dataclass
@@ -103,19 +103,21 @@ class CompatContext:
 
     def get_config(self, umo: str = "") -> dict[str, Any]:
         """返回带 tavily key 开关的配置替身，控制插件的联网搜索分支。"""
-        bocha_key = str(getattr(self._config, "bocha_api_key", "") or "").strip()
+        deepseek_key = str(
+            getattr(self._config, "deepseek_search_api_key", "") or ""
+        ).strip()
         return {
             "provider_settings": {
-                "websearch_tavily_key": [bocha_key] if bocha_key else [],
+                "websearch_tavily_key": [deepseek_key] if deepseek_key else [],
             }
         }
 
 
 async def tavily_search(provider_settings: dict[str, Any], payload: dict[str, Any]) -> list[SearchResult]:
-    """AstrBot _tavily_search 替身：调 Bocha Web Search。
+    """AstrBot _tavily_search 替身：调 DeepSeek Search API。
 
     provider_settings 来自 CompatContext.get_config()，其中
-    websearch_tavily_key 实际存放 Bocha key。
+    websearch_tavily_key 实际存放 DeepSeek key。
     """
     keys = provider_settings.get("websearch_tavily_key") or []
     api_key = ""
@@ -132,33 +134,29 @@ async def tavily_search(provider_settings: dict[str, Any], payload: dict[str, An
         count = int(payload.get("max_results") or 5)
     except (TypeError, ValueError):
         count = 5
-    body_payload: dict[str, Any] = {
-        "query": query,
-        "summary": True,
-        "count": max(1, min(8, count)),
-        "page": 1,
-    }
     async with httpx.AsyncClient(timeout=20.0) as client:
         response = await client.post(
-            _BOCHA_ENDPOINT,
+            _DEEPSEEK_SEARCH_ENDPOINT,
             headers={
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
             },
-            json=body_payload,
+            json={
+                "query": query,
+                "count": max(1, min(8, count)),
+                "need_content": False,
+            },
         )
         response.raise_for_status()
         body = response.json()
-    data = body.get("data") if isinstance(body.get("data"), dict) else body
-    pages = data.get("webPages") or {}
-    values = pages.get("value") or []
+    values = body.get("results") if isinstance(body, dict) else None
     results: list[SearchResult] = []
-    for item in values:
+    for item in values or []:
         if not isinstance(item, dict):
             continue
-        title = str(item.get("name") or "").strip()
+        title = str(item.get("title") or "").strip()
         url = str(item.get("url") or "").strip()
-        snippet = str(item.get("summary") or "").strip()
+        snippet = str(item.get("summary") or item.get("snippet") or "").strip()
         if not title and not snippet:
             continue
         results.append(SearchResult(title=title, url=url, snippet=snippet))

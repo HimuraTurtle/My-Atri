@@ -170,12 +170,12 @@ class BotConfig:
     web_search_timeout_seconds: float = 6.0
     web_search_max_results: int = 5
     # 每轮回复前系统侧主动联网检索一次并注入证据，不依赖模型自发调用工具。
-    # 纯问候/语气消息自动跳过；注意博查按次计费，高频群聊请评估配额。
+    # 纯问候/语气消息自动跳过；注意 DeepSeek Search 按次计费，高频群聊请评估配额。
     web_search_proactive_enabled: bool = True
     web_page_max_chars: int = 8_000
-    # 搜索提供方：auto=有博查 key 用博查否则 RSS；rss=只用免费 RSS。
+    # 搜索提供方：auto=有 DeepSeek key 用 DeepSeek 否则 RSS；rss=只用免费 RSS。
     search_provider: str = "auto"
-    bocha_api_key: str | None = None
+    deepseek_search_api_key: str | None = None
     web_grounding_review_enabled: bool = True
     online_music_enabled: bool = True
     # Suwayomi 漫画助手：GraphQL 客户端、订阅推送与 LLM 工具。

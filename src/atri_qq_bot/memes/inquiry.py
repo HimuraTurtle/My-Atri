@@ -42,7 +42,7 @@ _TERM_BLOCK_WORDS = frozenset(
 )
 
 # 游戏/动漫垂直站：群聊语境里陌生的名词多半来自这两个圈子，
-# 先在这些站里找，找不到再全网搜。博查 include 最多 20 个域名。
+# 先在这些站里找，找不到再全网搜。DeepSeek site: 语法支持多域名 OR 组合。
 _VERTICAL_DOMAINS = (
     "moegirl.org.cn",
     "biligame.com",

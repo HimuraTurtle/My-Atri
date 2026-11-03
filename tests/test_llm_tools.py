@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Any
 
@@ -24,9 +24,11 @@ from atri_qq_bot.llm_tools.tool_loop import (
 from atri_qq_bot.llm_tools.weather_tool import _location_candidates, format_weather_result
 from atri_qq_bot.llm_tools.web_search_tool import (
     _bing_web_rss_url,
-    _bocha_freshness,
     _compact_research_query,
+    _deepseek_query,
     _filter_results_by_domains,
+    _format_utc_date,
+    _search_after_date,
     parse_arxiv_atom,
     parse_bing_news_rss,
     parse_github_repository_search,
@@ -51,15 +53,97 @@ def test_get_current_time_uses_shanghai_without_tzdata() -> None:
     assert "Asia/Shanghai" in reply
 
 
-def test_bocha_freshness_grades_recency_windows_by_query() -> None:
-    assert _bocha_freshness("news", "今天上海有什么新闻") == "oneDay"
-    assert _bocha_freshness("auto", "现在姆巴佩在哪个队") == "oneDay"
-    assert _bocha_freshness("news", "最近有什么时事热点") == "oneWeek"
-    assert _bocha_freshness("news", "姆巴佩近况怎么样") == "oneWeek"
-    assert _bocha_freshness("news", "今年第五人格亚运会冠军") == "oneYear"
-    assert _bocha_freshness("news", "姆巴佩是谁") == "oneMonth"
-    assert _bocha_freshness("auto", "樱羽艾玛是什么角色") is None
-    assert _bocha_freshness("web", "最新版本") is None
+def test_search_after_date_grades_recency_windows_by_query() -> None:
+    fixed = datetime(2026, 11, 3, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+    assert _search_after_date("news", "今天上海有什么新闻", now=fixed) == "2026-11-03"
+    assert _search_after_date("auto", "现在姆巴佩在哪个队", now=fixed) == "2026-11-03"
+    assert _search_after_date("news", "最近有什么时事热点", now=fixed) == "2026-10-27"
+    assert _search_after_date("news", "姆巴佩近况怎么样", now=fixed) == "2026-10-27"
+    assert _search_after_date("news", "今年第五人格亚运会冠军", now=fixed) == "2025-11-03"
+    assert _search_after_date("news", "姆巴佩是谁", now=fixed) == "2026-10-04"
+    assert _search_after_date("auto", "樱羽艾玛是什么角色", now=fixed) is None
+    assert _search_after_date("web", "最新版本", now=fixed) is None
+
+
+def test_deepseek_query_compiles_search_syntax() -> None:
+    fixed = datetime(2026, 11, 3, 12, 0, tzinfo=timezone(timedelta(hours=8)))
+
+    assert _deepseek_query("DeepSeek V4 发布", "auto", None, now=fixed) == "DeepSeek V4 发布"
+
+    news_query = _deepseek_query("新番动画", "news", ["bangumi.tv"], now=fixed)
+    assert news_query.startswith("新番动画 site:bangumi.tv")
+    assert "lang:zh" in news_query
+    assert "after:2026-10-27" in news_query  # "新番"→一周窗口
+
+    scoped = _deepseek_query("某个角色", "web", ["moegirl.org.cn", "bangumi.tv"], now=fixed)
+    assert "site:moegirl.org.cn OR site:bangumi.tv" in scoped
+    assert "lang:" not in scoped
+    assert "after:" not in scoped
+
+
+def test_format_utc_date_converts_to_beijing_time() -> None:
+    assert _format_utc_date("2026-11-03T07:30:00+00:00") == "2026-11-03 15:30"
+    assert _format_utc_date("2026-11-03T07:30:00Z") == "2026-11-03 15:30"
+    assert _format_utc_date("") == ""
+    assert _format_utc_date(None) == ""
+    assert _format_utc_date("not-a-date") == "not-a-date"
+
+
+def test_search_deepseek_parses_results_with_quality_signals() -> None:
+    from atri_qq_bot.llm_tools import web_search_tool as wst
+
+    class _FakeResponse:
+        def raise_for_status(self) -> None:
+            return None
+
+        def json(self) -> dict:
+            return {
+                "results": [
+                    {
+                        "rerank_score": 2.4,
+                        "title": "DeepSeek V4 模型发布",
+                        "url": "https://example.com/deepseek-v4",
+                        "snippet": "短摘要",
+                        "summary": "DeepSeek 发布了 V4 模型，改进了工具调用与长上下文。",
+                        "content": "",
+                        "date": "2026-11-01T00:00:00+00:00",
+                        "authority": 3,
+                    },
+                    {"title": "", "url": "https://example.com/empty-title"},
+                    {"title": "无 URL 的结果", "url": ""},
+                    "not-a-dict",
+                ]
+            }
+
+    class _FakeClient:
+        def __init__(self) -> None:
+            self.calls: list[dict] = []
+
+        async def post(self, url: str, headers: dict, json: dict) -> _FakeResponse:
+            self.calls.append({"url": url, "headers": headers, "json": json})
+            return _FakeResponse()
+
+    client = _FakeClient()
+    results = asyncio.run(
+        wst._search_deepseek(client, "今天新番", "news", 5, "sk-test")
+    )
+    assert len(results) == 1
+    first = results[0]
+    assert first["title"] == "DeepSeek V4 模型发布"
+    assert first["published_at"] == "2026-11-01 08:00"
+    assert "相关度 2.4/3" in first["source_type"]
+    assert "权威度 3/4" in first["source_type"]
+    assert "长上下文" in first["summary"]
+
+    request = client.calls[0]
+    assert request["url"] == "https://api.deepseek.com/v1/tools/search"
+    assert request["headers"]["Authorization"] == "Bearer sk-test"
+    assert request["json"]["ori_question"] == "今天新番"
+    assert request["json"]["need_content"] is False
+    assert request["json"]["count"] == 5
+    # 时敏词"今天"应编译进 query 的 after: 语法
+    assert "after:" in request["json"]["query"]
+    assert "lang:zh" in request["json"]["query"]
 
 
 def test_parse_bing_news_rss_strips_html_and_limits_results() -> None:

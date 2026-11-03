@@ -25,6 +25,20 @@ from .env import (
 from .schema import VALID_REPLY_MODES, BotConfig
 
 
+def _resolve_deepseek_search_key() -> str | None:
+    """搜索 key：优先 DEEPSEEK_SEARCH_API_KEY，缺省时复用视觉通道的
+    DeepSeek 官方 key（视觉模型走 api.deepseek.com，鉴权体系相同）。"""
+
+    explicit = _optional_env("DEEPSEEK_SEARCH_API_KEY")
+    if explicit:
+        return explicit
+    vision_base_url = _env("TOOLBOX_VISION_BASE_URL", "").strip()
+    vision_key = _optional_env("TOOLBOX_VISION_API_KEY")
+    if vision_key and "api.deepseek.com" in vision_base_url:
+        return vision_key
+    return None
+
+
 def load_config(env_file: str | Path | None = None) -> BotConfig:
     """加载指定 .env 并返回已校验配置；非法回复模式会立即报错。"""
     root = _project_root()
@@ -309,7 +323,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         web_search_proactive_enabled=_env_bool("WEB_SEARCH_PROACTIVE_ENABLED", True),
         web_page_max_chars=max(1000, min(20_000, _env_int("WEB_PAGE_MAX_CHARS", 8_000))),
         search_provider=_env("SEARCH_PROVIDER", "auto").strip().casefold() or "auto",
-        bocha_api_key=_optional_env("BOCHA_API_KEY"),
+        deepseek_search_api_key=_resolve_deepseek_search_key(),
         web_grounding_review_enabled=_env_bool("WEB_GROUNDING_REVIEW_ENABLED", True),
         online_music_enabled=_env_bool("ONLINE_MUSIC_ENABLED", True),
         anima_enabled=_env_bool("ANIMA_ENABLED", False),
