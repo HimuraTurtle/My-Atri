@@ -201,6 +201,11 @@ class OneBotEventMixin(OneBotServerMixin):
         if await self._maybe_handle_avatar_command(websocket, event, plain_text, conversation_id):
             return
 
+        # 对称修图（引用图片 + 「对称」）：确定性入口，纯本地 PIL 操作，
+        # 不经过聊天模型；没有可用图片时放行，避免闲聊误拦。
+        if await self._maybe_handle_image_edit_command(websocket, event, plain_text, conversation_id):
+            return
+
         # 常见点歌表达在聊天模型之前处理。它们只读取完整音乐目录中的成品，
         # 不受模型工具调用、TTS 开关或群聊提示词影响，也不会用文字假装唱歌。
         turn_id = str(event.get("message_id") or uuid.uuid4().hex)
