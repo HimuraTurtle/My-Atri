@@ -1,8 +1,8 @@
-"""OneBot 层的修图指令：引用图片 + 「对称」→ 左半镜像覆盖右半。
+"""OneBot 层的修图指令：引用图片 + 「（上/下/左/右）对称」→ 半区镜像覆盖。
 
 确定性入口，与漫画命令同级（回复门控之后、聊天模型之前）：
-- 触发条件是「对称/镜像祈使 + 消息里有可用图片」的合取——没有图片时
-  放行给聊天模型，避免「这构图好对称」这类闲聊被误拦；
+- 触发条件是「对称/镜像祈使（可带方向词）+ 消息里有可用图片」的合取
+  ——没有图片时放行给聊天模型，避免「这构图好对称」这类闲聊被误拦；
 - 图片优先取被引用消息，其次取当前消息；
 - 下载/解码/处理失败时坦诚说明，绝不编造结果。
 """
@@ -23,9 +23,9 @@ from PIL import Image, ImageOps
 from ...image_edit import (
     first_image_segment,
     is_animated,
-    is_symmetry_request,
     load_segment_image_bytes,
-    mirror_left_to_right,
+    mirror_image,
+    parse_symmetry_request,
     write_mirrored_gif,
 )
 from ...message_plan import OutgoingMessage
@@ -46,7 +46,9 @@ _FAILURE_PROCESS = "这张图我处理不动呀，稍后再试试"
 _FAILURE_GIF = "这张动图我处理不动呀，稍后再试试"
 
 
-def _write_mirrored_static(image_bytes: bytes, output_path: Path) -> None:
+def _write_mirrored_static(
+    image_bytes: bytes, output_path: Path, direction: str
+) -> None:
     """静态图处理（线程池执行）：EXIF 摆正 → 长边 4096 封顶 → 镜像 → PNG。"""
     with Image.open(io.BytesIO(image_bytes)) as source:
         image = ImageOps.exif_transpose(source)
@@ -58,13 +60,15 @@ def _write_mirrored_static(image_bytes: bytes, output_path: Path) -> None:
                 (max(1, round(width * scale)), max(1, round(height * scale))),
                 Image.LANCZOS,
             )
-        mirror_left_to_right(image).save(output_path, format="PNG")
+        mirror_image(image, direction).save(output_path, format="PNG")
 
 
-def _write_mirrored_gif(image_bytes: bytes, output_path: Path) -> int:
-    """动图处理（线程池执行）：逐帧镜像写回 GIF，返回输出帧数。"""
+def _write_mirrored_gif(
+    image_bytes: bytes, output_path: Path, direction: str
+) -> int:
+    """动图处理（线程池执行）：逐帧按方向镜像写回 GIF，返回输出帧数。"""
     with Image.open(io.BytesIO(image_bytes)) as source:
-        return write_mirrored_gif(source, output_path)
+        return write_mirrored_gif(source, output_path, direction=direction)
 
 
 class OneBotImageEditMixin(OneBotServerMixin):
@@ -76,7 +80,8 @@ class OneBotImageEditMixin(OneBotServerMixin):
         conversation_id: str,
     ) -> bool:
         """命中「对称修图」时完成处理并返回 True，调用方直接结束本轮。"""
-        if not is_symmetry_request(plain_text):
+        direction = parse_symmetry_request(plain_text)
+        if direction is None:
             return False
 
         segment = await self._find_edit_target_segment(websocket, event)
@@ -85,7 +90,7 @@ class OneBotImageEditMixin(OneBotServerMixin):
             # 放行给聊天模型，不在这里抢话。
             return False
 
-        handled = await self._mirror_and_reply(websocket, event, segment)
+        handled = await self._mirror_and_reply(websocket, event, segment, direction)
         if handled:
             self._mark_smart_group_reply(event, conversation_id, plain_text)
             self.reply_engine.record_bot_reply(
@@ -117,6 +122,7 @@ class OneBotImageEditMixin(OneBotServerMixin):
         websocket: Any,
         event: dict[str, Any],
         segment: dict[str, Any],
+        direction: str,
     ) -> bool:
         data = segment.get("data") or {}
         label = str(data.get("url") or data.get("file") or "")[:100]
@@ -154,14 +160,19 @@ class OneBotImageEditMixin(OneBotServerMixin):
             return True
 
         if animated:
-            return await self._mirror_gif_and_reply(websocket, event, image_bytes)
-        return await self._mirror_static_and_reply(websocket, event, image_bytes)
+            return await self._mirror_gif_and_reply(
+                websocket, event, image_bytes, direction
+            )
+        return await self._mirror_static_and_reply(
+            websocket, event, image_bytes, direction
+        )
 
     async def _mirror_static_and_reply(
         self,
         websocket: Any,
         event: dict[str, Any],
         image_bytes: bytes,
+        direction: str,
     ) -> bool:
         """静态路径：EXIF 摆正 + 4096 封顶 + 镜像，全程线程池执行。"""
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -170,7 +181,7 @@ class OneBotImageEditMixin(OneBotServerMixin):
         try:
             await asyncio.wait_for(
                 loop.run_in_executor(
-                    None, _write_mirrored_static, image_bytes, output_path
+                    None, _write_mirrored_static, image_bytes, output_path, direction
                 ),
                 timeout=_STATIC_EDIT_TIMEOUT_SECONDS,
             )
@@ -193,6 +204,7 @@ class OneBotImageEditMixin(OneBotServerMixin):
         websocket: Any,
         event: dict[str, Any],
         image_bytes: bytes,
+        direction: str,
     ) -> bool:
         """动图路径：逐帧镜像后以 GIF 回发；编解码全程在线程池执行。"""
         _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
@@ -201,7 +213,7 @@ class OneBotImageEditMixin(OneBotServerMixin):
         try:
             frame_count = await asyncio.wait_for(
                 loop.run_in_executor(
-                    None, _write_mirrored_gif, image_bytes, output_path
+                    None, _write_mirrored_gif, image_bytes, output_path, direction
                 ),
                 timeout=_GIF_EDIT_TIMEOUT_SECONDS,
             )
@@ -223,7 +235,10 @@ class OneBotImageEditMixin(OneBotServerMixin):
     async def _send_edit_result(
         self, websocket: Any, event: dict[str, Any], output_path: Path
     ) -> bool:
-        delivered = await self.send_reply(
+        # send_reply 对 image 消息恒返回空串（只有 text/record 进
+        # delivered_parts），不能当失败信号——真实失败由 send_reply
+        # 内部记 ERROR 日志与投递事件，与 anima 图片投递同一契约。
+        await self.send_reply(
             websocket,
             event,
             [OutgoingMessage("image", str(output_path))],
@@ -231,8 +246,6 @@ class OneBotImageEditMixin(OneBotServerMixin):
             model_name=self._delivery_model_name("chat"),
         )
         self._schedule_image_edit_cleanup(output_path)
-        if not delivered:
-            LOGGER.warning("对称修图结果发送失败：%s", output_path.name)
         return True
 
     def _schedule_image_edit_cleanup(self, path: Path, delay: float = 60.0) -> None:

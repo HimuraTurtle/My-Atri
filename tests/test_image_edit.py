@@ -20,7 +20,9 @@ from atri_qq_bot.image_edit import (
     is_animated,
     is_symmetry_request,
     load_segment_image_bytes,
+    mirror_image,
     mirror_left_to_right,
+    parse_symmetry_request,
 )
 from atri_qq_bot.image_edit.gif import _rgba_to_palette, write_mirrored_gif
 from atri_qq_bot.onebot.server import OneBotServer
@@ -31,6 +33,14 @@ def _gradient_image(width: int, height: int = 1) -> Image.Image:
     for x in range(width):
         for y in range(height):
             image.putpixel((x, y), (x * 10, 0, 0))
+    return image
+
+
+def _vgradient_image(height: int, width: int = 1) -> Image.Image:
+    image = Image.new("RGB", (width, height))
+    for y in range(height):
+        for x in range(width):
+            image.putpixel((x, y), (y * 10, 0, 0))
     return image
 
 
@@ -95,6 +105,72 @@ class TestMirror:
 
         assert [source.getpixel((x, 0)) for x in range(4)] == before
 
+    def test_right_direction_even_width(self) -> None:
+        source = _gradient_image(6)
+
+        result = mirror_image(source, "right")
+
+        colors = [result.getpixel((x, 0)) for x in range(6)]
+        # 右半保持 30,40,50；左半 = 右半镜像 50,40,30。
+        assert colors == [
+            (50, 0, 0), (40, 0, 0), (30, 0, 0), (30, 0, 0), (40, 0, 0), (50, 0, 0),
+        ]
+
+    def test_right_direction_odd_width_center_column_stays(self) -> None:
+        source = _gradient_image(5)
+
+        result = mirror_image(source, "right")
+
+        colors = [result.getpixel((x, 0)) for x in range(5)]
+        # 中列 x2 保持 20；x1<-x3, x0<-x4。
+        assert colors == [(40, 0, 0), (30, 0, 0), (20, 0, 0), (30, 0, 0), (40, 0, 0)]
+
+    def test_top_direction_even_height(self) -> None:
+        source = _vgradient_image(6)
+
+        result = mirror_image(source, "top")
+
+        colors = [result.getpixel((0, y)) for y in range(6)]
+        # 上半保持 0,10,20；下半 = 上半镜像 20,10,0。
+        assert colors == [
+            (0, 0, 0), (10, 0, 0), (20, 0, 0), (20, 0, 0), (10, 0, 0), (0, 0, 0),
+        ]
+
+    def test_bottom_direction_odd_height_center_row_stays(self) -> None:
+        source = _vgradient_image(5)
+
+        result = mirror_image(source, "bottom")
+
+        colors = [result.getpixel((0, y)) for y in range(5)]
+        # 中行 y2 保持 20；y1<-y3, y0<-y4。
+        assert colors == [(40, 0, 0), (30, 0, 0), (20, 0, 0), (30, 0, 0), (40, 0, 0)]
+
+    def test_palette_mode_is_preserved_for_directions(self) -> None:
+        source = Image.new("P", (4, 4))
+        for x in range(4):
+            source.putpixel((x, 0), x + 1)
+
+        result = mirror_image(source, "right")
+
+        assert result.mode == "P"
+        # mid=2：右半 [3,4] 镜像贴到左半 → [4,3,3,4]。
+        assert [result.getpixel((x, 0)) for x in range(4)] == [4, 3, 3, 4]
+
+    def test_tiny_dimension_returns_unchanged_copy_per_direction(self) -> None:
+        wide = Image.new("RGB", (1, 4), (5, 5, 5))
+        tall = Image.new("RGB", (4, 1), (6, 6, 6))
+
+        for direction in ("left", "right"):
+            assert mirror_image(wide, direction).getpixel((0, 0)) == (5, 5, 5)
+        for direction in ("top", "bottom"):
+            assert mirror_image(tall, direction).getpixel((0, 0)) == (6, 6, 6)
+
+    def test_unknown_direction_raises(self) -> None:
+        source = _gradient_image(4)
+
+        with pytest.raises(ValueError):
+            mirror_image(source, "diagonal")
+
 
 class TestSymmetryTrigger:
     @pytest.mark.parametrize(
@@ -132,21 +208,57 @@ class TestSymmetryTrigger:
             "别对称",
             "不用镜像",
             "先不镜像",
-            "右对称",
-            "右边对称",
-            "右镜像",
-            "右边镜像",
-            "上下对称",
-            "上下镜像",
+            "右边不要对称",
+            "不要右边对称",
+            "别上镜像",
+            "不用下面对称",
             "垂直对称",
+            "垂直镜像",
+            "水平对称",
             "这个构图好对称但我说的是构图",
             "对称化设计很好",
         ],
     )
-    def test_rejects_negation_other_directions_and_chitchat(
-        self, text: str
+    def test_rejects_negation_ambiguity_and_chitchat(self, text: str) -> None:
+        assert parse_symmetry_request(text) is None, text
+
+    @pytest.mark.parametrize(
+        "text, direction",
+        [
+            ("对称", "left"),
+            ("镜像", "left"),
+            ("左对称", "left"),
+            ("左边对称", "left"),
+            ("左右对称", "left"),
+            ("左右镜像", "left"),
+            ("右对称", "right"),
+            ("右边对称", "right"),
+            ("右镜像", "right"),
+            ("右边镜像", "right"),
+            ("上对称", "top"),
+            ("上面对称", "top"),
+            ("上边对称", "top"),
+            ("上半对称", "top"),
+            ("上镜像", "top"),
+            ("上下对称", "top"),
+            ("上下镜像", "top"),
+            ("下对称", "bottom"),
+            ("下面对称", "bottom"),
+            ("下边对称", "bottom"),
+            ("下半镜像", "bottom"),
+            ("下镜像", "bottom"),
+            ("左半对称", "left"),
+            ("右半镜像", "right"),
+            ("帮我对称", "left"),
+            ("亚托莉，右对称呀", "right"),
+            ("能不能给我上对称一下", "top"),
+            ("帮我左半对称", "left"),
+        ],
+    )
+    def test_parses_direction_from_imperative(
+        self, text: str, direction: str
     ) -> None:
-        assert not is_symmetry_request(text), text
+        assert parse_symmetry_request(text) == direction, text
 
 
 class TestSegmentLookup:
@@ -265,6 +377,15 @@ def _assert_left_mirrored(frame: Image.Image) -> None:
     assert left.tobytes() == right.transpose(Image.FLIP_LEFT_RIGHT).tobytes()
 
 
+def _assert_top_mirrored(frame: Image.Image) -> None:
+    rgba = frame.convert("RGBA")
+    width, height = rgba.size
+    mid = (height + 1) // 2
+    top = rgba.crop((0, 0, width, mid))
+    bottom = rgba.crop((0, height - mid, width, height))
+    assert top.tobytes() == bottom.transpose(Image.FLIP_TOP_BOTTOM).tobytes()
+
+
 class _EofTruncatingSource:
     """病态 GIF 替身：n_frames 虚高，seek 越界抛 EOFError。"""
 
@@ -285,11 +406,13 @@ class _EofTruncatingSource:
 
 
 class TestGifMirror:
-    def _mirror_and_open(self, gif_bytes: bytes) -> Image.Image:
+    def _mirror_and_open(
+        self, gif_bytes: bytes, direction: str = "left"
+    ) -> Image.Image:
         source = Image.open(io.BytesIO(gif_bytes))
         output = Path(tempfile.gettempdir()) / f"test_mirror_{uuid.uuid4().hex}.gif"
         try:
-            write_mirrored_gif(source, output)
+            write_mirrored_gif(source, output, direction=direction)
             data = output.read_bytes()
         finally:
             output.unlink(missing_ok=True)
@@ -310,6 +433,24 @@ class TestGifMirror:
             for index in range(result.n_frames):
                 result.seek(index)
                 _assert_left_mirrored(result)
+
+    def test_every_frame_is_top_mirrored_with_direction(self) -> None:
+        frames = []
+        for step in range(3):
+            frame = Image.new("RGBA", (4, 8), (0, 0, 0, 0))
+            # 每帧上半放一个不同位置的色块，下半留空——垂直不对称的输入。
+            for y in range(4):
+                frame.putpixel((step % 4, y), (0, 255, 0, 255))
+            frames.append(frame)
+
+        with self._mirror_and_open(
+            _build_gif_bytes(frames, 40), direction="top"
+        ) as result:
+            assert result.is_animated is True
+            assert result.n_frames == 3
+            for index in range(result.n_frames):
+                result.seek(index)
+                _assert_top_mirrored(result)
 
     def test_delta_frame_gif_is_composited_before_mirror(self) -> None:
         # 帧2 只有 10x10 补丁（真·增量帧）。输出帧2 必须是完整画布上
@@ -422,7 +563,9 @@ class TestStaticWrite:
         source.save(buffer, format="PNG")
 
         output = tmp_path / "capped.png"
-        server_image_edit_module._write_mirrored_static(buffer.getvalue(), output)
+        server_image_edit_module._write_mirrored_static(
+            buffer.getvalue(), output, "left"
+        )
 
         with Image.open(output) as result:
             assert result.size == (4096, 1)
@@ -501,6 +644,62 @@ class TestSymmetryCommand:
                 # 右半被左半镜像覆盖：全图变红。
                 assert result.getpixel((4, 0)) == (200, 0, 0)
                 assert result.getpixel((5, 1)) == (200, 0, 0)
+        finally:
+            output_path.unlink(missing_ok=True)
+
+    def test_mirrors_quoted_image_with_direction_end_to_end(
+        self, monkeypatch
+    ) -> None:
+        server = _server_stub()
+        sent: list = []
+        self._patch_sending(server, sent)
+
+        # 2x6 竖图：上半红、下半蓝。命令「下对称」= 下半镜像覆盖上半。
+        source = Image.new("RGB", (2, 6))
+        for y in range(6):
+            for x in range(2):
+                source.putpixel((x, y), (200, 0, 0) if y < 3 else (0, 0, 200))
+        png = _png_bytes(source)
+
+        async def fake_resolve(websocket, event):
+            return (
+                "1001",
+                "",
+                [{"type": "image", "data": {"url": "https://example.test/img.png"}}],
+            )
+
+        async def fake_load(segment, action_caller=None):
+            return png
+
+        monkeypatch.setattr(server, "_resolve_quoted_message", fake_resolve)
+        monkeypatch.setattr(
+            server_image_edit_module, "load_segment_image_bytes", fake_load
+        )
+
+        event = {
+            "message_type": "private",
+            "message": [
+                {"type": "reply", "data": {"id": "1001"}},
+                {"type": "text", "data": {"text": "下对称"}},
+            ],
+        }
+        handled = asyncio.run(
+            server._maybe_handle_image_edit_command(
+                object(), event, "下对称", "private:10001"
+            )
+        )
+
+        assert handled is True
+        assert len(sent) == 1
+        assert sent[0][0].kind == "image"
+        output_path = Path(sent[0][0].content)
+        try:
+            with Image.open(output_path) as result:
+                assert result.size == (2, 6)
+                # 上半被下半镜像覆盖：全图变蓝。
+                assert result.getpixel((0, 0)) == (0, 0, 200)
+                assert result.getpixel((1, 2)) == (0, 0, 200)
+                _assert_top_mirrored(result)
         finally:
             output_path.unlink(missing_ok=True)
 
@@ -818,7 +1017,14 @@ class TestSymmetryCommand:
     def test_mirrors_quoted_gif_end_to_end(self, monkeypatch) -> None:
         server = _server_stub()
         sent: list = []
-        self._patch_sending(server, sent)
+
+        # 真实 send_reply 对 image 消息恒返回空串（只有 text/record 进
+        # delivered_parts）——空串是正常契约，不是失败信号。
+        async def fake_send_reply(websocket, event, outgoing, **kwargs):
+            sent.append(list(outgoing))
+            return ""
+
+        server.send_reply = fake_send_reply  # type: ignore[method-assign]
 
         frames = []
         for step in range(3):

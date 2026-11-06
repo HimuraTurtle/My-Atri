@@ -20,7 +20,7 @@ from typing import Iterator
 
 from PIL import Image
 
-from .mirror import mirror_left_to_right
+from .mirror import mirror_image
 
 GIF_MAX_DIMENSION = 1024
 GIF_RESCALE_DIMENSION = 640
@@ -68,13 +68,16 @@ def _rgba_to_palette(frame: Image.Image) -> Image.Image:
 
 
 def _mirror_frame(
-    source: Image.Image, index: int, target_size: tuple[int, int] | None
+    source: Image.Image,
+    index: int,
+    target_size: tuple[int, int] | None,
+    direction: str,
 ) -> Image.Image:
     source.seek(index)
     frame = source.convert("RGBA")
     if target_size is not None:
         frame = frame.resize(target_size, Image.LANCZOS)
-    return _rgba_to_palette(mirror_left_to_right(frame))
+    return _rgba_to_palette(mirror_image(frame, direction))
 
 
 def _save_mirrored_gif(
@@ -84,13 +87,14 @@ def _save_mirrored_gif(
     indices: range,
     loop: int,
     target_size: tuple[int, int] | None,
+    direction: str,
 ) -> None:
     def frames() -> Iterator[Image.Image]:
         # 损坏 GIF 的 n_frames 可能虚高：seek 越界抛 EOFError 时在已
         # 解码的帧处截断，绝不发出半残帧。
         for index in indices:
             try:
-                yield _mirror_frame(source, index, target_size)
+                yield _mirror_frame(source, index, target_size, direction)
             except EOFError:
                 return
 
@@ -115,8 +119,9 @@ def write_mirrored_gif(
     max_dimension: int = GIF_MAX_DIMENSION,
     max_frames: int = GIF_MAX_FRAMES,
     max_bytes: int = GIF_MAX_OUTPUT_BYTES,
+    direction: str = "left",
 ) -> int:
-    """把动图逐帧镜像后写成 GIF，返回输出的帧数。
+    """把动图逐帧按方向镜像后写成 GIF，返回输出的帧数。
 
     要求 ``source`` 是动图（is_animated 为真）；调用方负责静态图分流。
     输出超过 ``max_bytes`` 时按 640px 降采样重编码一次，仍超预算抛
@@ -142,7 +147,15 @@ def write_mirrored_gif(
     indices = range(0, decoded, step)
     durations = [sum(raw_durations[i : i + step]) for i in indices]
 
-    _save_mirrored_gif(source, output_path, durations, indices, loop, _target_size(source.size, max_dimension))
+    _save_mirrored_gif(
+        source,
+        output_path,
+        durations,
+        indices,
+        loop,
+        _target_size(source.size, max_dimension),
+        direction,
+    )
     if output_path.stat().st_size <= max_bytes:
         return len(durations)
 
@@ -153,6 +166,7 @@ def write_mirrored_gif(
         indices,
         loop,
         _target_size(source.size, GIF_RESCALE_DIMENSION),
+        direction,
     )
     if output_path.stat().st_size > max_bytes:
         raise ValueError("mirrored gif exceeds size budget")

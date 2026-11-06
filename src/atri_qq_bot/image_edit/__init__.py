@@ -9,8 +9,8 @@ from __future__ import annotations
 
 from .fetch import download_image, first_image_segment, load_segment_image_bytes
 from .gif import is_animated, write_mirrored_gif
-from .mirror import mirror_left_to_right
-from .trigger import is_symmetry_request
+from .mirror import mirror_image, mirror_left_to_right
+from .trigger import is_symmetry_request, parse_symmetry_request
 
 __all__ = [
     "download_image",
@@ -18,6 +18,8 @@ __all__ = [
     "load_segment_image_bytes",
     "is_animated",
     "write_mirrored_gif",
+    "mirror_image",
     "mirror_left_to_right",
     "is_symmetry_request",
+    "parse_symmetry_request",
 ]
