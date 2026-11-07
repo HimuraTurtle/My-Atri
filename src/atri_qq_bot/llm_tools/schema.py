@@ -43,6 +43,8 @@ def available_tool_schemas(config: Any) -> list[dict[str, Any]]:
     if bool(getattr(config, "papers_enabled", True)):
         tools.append(_paper_search_schema())
         tools.append(_paper_digest_schema())
+    if bool(getattr(config, "documents_enabled", True)):
+        tools.append(_send_document_schema())
     if bool(getattr(config, "qzone_enabled", False)) and bool(
         getattr(config, "qzone_ai_tools_enabled", True)
     ):
@@ -599,6 +601,10 @@ def _paper_search_schema() -> dict[str, Any]:
                 "query 传核心学术关键词（中英文均可），不要口语化；"
                 "结果返回标题、作者、年份、期刊、被引数、url（DOI 或 OpenAlex 网址）"
                 "与摘要，均为真实元数据。整理回复时每篇文献必须附上其 url。"
+                "检索成功后系统会自动把结果生成一份论文概要文档"
+                "（速览与逐篇信息卡），并在你的回复发出后发送给用户，"
+                "回复里顺带提一句文档随后就到即可，不要谎称文件已发出，"
+                "也无需再调用 compile_paper_digest。"
                 "普通资讯、新闻仍用 search_web。"
             ),
             "parameters": {
@@ -640,13 +646,14 @@ def _paper_digest_schema() -> dict[str, Any]:
         "function": {
             "name": "compile_paper_digest",
             "description": (
-                "把本会话最近一次 search_papers 检索到的论文整理成 Word 文档"
-                "并发送给用户（私聊与群聊均可）。用户看过论文检索结果后要求"
-                "「整理成文档」「总结成文件」「发我一份」时调用；本会话还没"
-                "检索过论文时不要调用，先调 search_papers。默认整理全部论文，"
-                "用户只要其中几篇时用 indices 按检索结果顺序指定（从 1 开始）。"
-                "summary 传你基于检索结果写的中文综述（研究脉络、方法对比、"
-                "适合谁读，可多段），没有可写的内容就留空，严禁编造。"
+                "把本会话最近一次 search_papers 检索到的论文重新整理成定制版"
+                " Word 文档并发送给用户（私聊与群聊均可）。注意：每次检索成功后"
+                "系统已自动发送过一版基础概要文档（全部论文、无综述），"
+                "因此仅在用户想要定制版时调用：只要其中几篇（indices 按检索"
+                "结果顺序从 1 开始指定）或想要你写的中文综述（summary 传基于"
+                "检索结果的真实综述：研究脉络、方法对比、适合谁读，可多段，"
+                "严禁编造，没有可写的内容就留空）。本会话还没检索过论文时"
+                "不要调用，先调 search_papers。"
                 "文档生成成功后系统会在你的回复发出后自动发送文件，"
                 "回复里说明发的是什么即可，不要谎称文件已发出。"
             ),
@@ -669,6 +676,46 @@ def _paper_digest_schema() -> dict[str, Any]:
                         ),
                     },
                 },
+                "additionalProperties": False,
+            },
+        },
+    }
+
+
+def _send_document_schema() -> dict[str, Any]:
+    return {
+        "type": "function",
+        "function": {
+            "name": "send_document",
+            "description": (
+                "把你要发给用户的整理内容写成 Word 文档并发送（私聊与群聊均可）。"
+                "凡是你在回复里承诺「整理成文档」「总结成文件」「发你一份」"
+                "「稍后就到」的内容，必须调用本工具真正生成文件，"
+                "绝不能只口头承诺而不调用。内容用你已掌握的真实信息，严禁编造。"
+                "title 是文档标题；content 是正文，支持轻量 Markdown："
+                "「# / ##」小节标题、「- 」列表项、「> 」备注行、"
+                "单独一行的网址或 [文字](网址) 会渲染成可点击链接。"
+                "注意：search_papers 检索成功后系统会自动发送论文概要文档，"
+                "不要用本工具重复发送同样的内容。"
+                "文档生成成功后系统会在你的回复发出后自动发送文件，"
+                "回复里说明发的是什么即可，不要谎称文件已发出。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "title": {
+                        "type": "string",
+                        "description": "文档标题，简洁概括内容主题。",
+                    },
+                    "content": {
+                        "type": "string",
+                        "description": (
+                            "文档正文（轻量 Markdown，多段用换行分隔，"
+                            "不超过 12000 字）。"
+                        ),
+                    },
+                },
+                "required": ["title", "content"],
                 "additionalProperties": False,
             },
         },

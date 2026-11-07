@@ -175,3 +175,133 @@ def test_automatic_tool_runner_keeps_legacy_followup_order() -> None:
     assert result.tool_receipts[0].name == "get_current_time"
     assert any(item.get("role") == "tool" for item in payloads[1]["messages"])
     assert "tools" not in payloads[1]
+
+
+def test_document_promise_guard_matches_evidenced_lies() -> None:
+    from atri_qq_bot.llm_tools.tool_loop import has_document_promise_without_receipt
+
+    # 三次实测的虚假承诺原话都必须命中。
+    assert has_document_promise_without_receipt(
+        "好，整理好了，文档随后就到", set()
+    )
+    assert has_document_promise_without_receipt(
+        "好，我整理好发你，稍等一下", set()
+    )
+    assert has_document_promise_without_receipt(
+        "文档已发送，请查收", set()
+    )
+    # 有真实文档工具回执（send_document / 整理 / 检索自动概要）时不拦。
+    assert not has_document_promise_without_receipt(
+        "文档已发送，请查收", {"send_document"}
+    )
+    assert not has_document_promise_without_receipt(
+        "概要文档随后就到", {"search_papers"}
+    )
+    # 坦诚失败与条件性提议不拦。
+    assert not has_document_promise_without_receipt(
+        "文档发送失败了，稍后再让我试一次吧", set()
+    )
+    assert not has_document_promise_without_receipt(
+        "要的话我发你一份概要", set()
+    )
+    # 内容在回复正文里、没承诺发文件时不拦。
+    assert not has_document_promise_without_receipt(
+        "概要整理在上面了，你看看", set()
+    )
+
+
+def test_automatic_tool_runner_repairs_document_promise_without_receipt() -> None:
+    payloads: list[dict[str, object]] = []
+    messages: list[dict[str, object]] = [{"role": "user", "content": "整理概要"}]
+
+    async def request_model(payload: dict[str, object]) -> dict[str, object]:
+        payloads.append(payload)
+        if len(payloads) == 1:
+            # 实测失败模式：口头承诺发文档，但不调用任何工具。
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "好，整理好了，文档随后就到",
+                        }
+                    }
+                ]
+            }
+        if len(payloads) == 2:
+            # 守卫纠正后：真正调用 send_document。
+            assert any(
+                item.get("role") == "system"
+                and "虚假承诺" in str(item.get("content"))
+                for item in payload["messages"]
+            )
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": "",
+                            "tool_calls": [
+                                {
+                                    "id": "doc-1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "send_document",
+                                        "arguments": '{"title":"概要","content":"内容"}',
+                                    },
+                                }
+                            ],
+                        }
+                    }
+                ]
+            }
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "文档生成好了，马上发你。"}}
+            ]
+        }
+
+    async def send_document_tool(arguments: dict[str, object], config: object) -> str:
+        return '{"ok": true, "file": "文档.docx"}'
+
+    runner = AutomaticToolRunner(
+        SimpleNamespace(llm_tool_max_calls=1),
+        request_model,
+        lambda text: text,
+        registry=ToolRegistry(
+            SimpleNamespace(), handlers={"send_document": send_document_tool}
+        ),
+    )
+
+    result = asyncio.run(
+        runner.run(messages, {"model": "test", "messages": messages, "tools": [{"x": 1}]})
+    )
+
+    assert result.reply_text == "文档生成好了，马上发你。"
+    assert result.tool_receipts[-1].name == "send_document"
+    assert result.tool_receipts[-1].ok is True
+    assert len(payloads) == 3  # 首答 + 纠正重答 + 工具后续
+
+
+def test_automatic_tool_runner_keeps_honest_reply_without_repair() -> None:
+    calls: list[int] = []
+
+    async def request_model(payload: dict[str, object]) -> dict[str, object]:
+        calls.append(1)
+        return {
+            "choices": [
+                {"message": {"role": "assistant", "content": "概要写在上面啦。"}}
+            ]
+        }
+
+    runner = AutomaticToolRunner(
+        SimpleNamespace(llm_tool_max_calls=1),
+        request_model,
+        lambda text: text,
+    )
+    messages: list[dict[str, object]] = [{"role": "user", "content": "整理概要"}]
+    result = asyncio.run(
+        runner.run(messages, {"model": "test", "messages": messages})
+    )
+    assert result.reply_text == "概要写在上面啦。"
+    assert len(calls) == 1  # 没有虚假承诺就不重答

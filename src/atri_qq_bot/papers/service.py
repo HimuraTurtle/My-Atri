@@ -178,6 +178,36 @@ class PapersService:
         )
         return {"ok": True, "query": query, "sort": sort, "count": len(papers), "papers": papers}
 
+    async def fetch_work(self, identifier: str) -> dict[str, Any]:
+        """按 DOI/arXiv 链接抓取单篇文献元数据（OpenAlex works/{id} 反解）。
+
+        供题录概要确定性触发使用：标识符必须是完整 URL 形式
+        （https://doi.org/... 或 https://arxiv.org/...），与 OpenAlex
+        的单篇反解端点一一对应。
+        """
+        identifier = str(identifier or "").strip()
+        if not identifier.startswith("http"):
+            return {"ok": False, "error": "文献标识必须是完整链接"}
+        timeout = max(
+            10.0,
+            min(60.0, float(getattr(self._config, "papers_timeout_seconds", 30.0) or 30.0)),
+        )
+        try:
+            work = await self._fetch_work(identifier, timeout)
+        except Exception as exc:
+            LOGGER.warning("论文题录抓取失败（%s）：%s", identifier, exc)
+            return {"ok": False, "error": f"OpenAlex 接口调用失败：{exc}"}
+        if not isinstance(work, dict) or not str(work.get("display_name") or "").strip():
+            return {"ok": False, "error": "未找到该文献"}
+        LOGGER.info("论文题录抓取完成：identifier=%.80s", identifier)
+        return {"ok": True, "paper": _to_paper(work)}
+
+    async def _fetch_work(self, identifier: str, timeout: float) -> dict[str, Any]:
+        async with httpx.AsyncClient(timeout=timeout) as client:
+            response = await client.get(f"{_OPENALEX_BASE}/{identifier}")
+            response.raise_for_status()
+            return response.json()
+
     async def _fetch(self, params: dict[str, str], timeout: float) -> dict[str, Any]:
         async with httpx.AsyncClient(timeout=timeout) as client:
             response = await client.get(_OPENALEX_BASE, params=params)

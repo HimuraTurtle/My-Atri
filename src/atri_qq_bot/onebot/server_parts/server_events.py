@@ -206,6 +206,11 @@ class OneBotEventMixin(OneBotServerMixin):
         if await self._maybe_handle_image_edit_command(websocket, event, plain_text, conversation_id):
             return
 
+        # 论文题录概要（消息带文献 DOI/链接 + 概要/整理/文档意图）：
+        # 确定性侧挂入口——不消耗消息，直接按标识符抓 OpenAlex 元数据
+        # 生成概要文档入队；文字回复照常走模型，文件在回复后投递。
+        await self._maybe_queue_citation_digest(event, plain_text, conversation_id)
+
         # 常见点歌表达在聊天模型之前处理。它们只读取完整音乐目录中的成品，
         # 不受模型工具调用、TTS 开关或群聊提示词影响，也不会用文字假装唱歌。
         turn_id = str(event.get("message_id") or uuid.uuid4().hex)
@@ -533,7 +538,7 @@ class OneBotEventMixin(OneBotServerMixin):
         event: dict[str, Any],
         conversation_id: str,
     ) -> None:
-        """投递本轮工具排队的交付物（漫画/绘画/论文整理文档）。
+        """投递本轮工具排队的交付物（漫画/绘画/论文整理/通用文档）。
 
         正常回复、回复文字失败、消息未获 OneBot 确认三条路径都会走到
         这里：这些文件是用户本轮明确索要的真实成果，不应随文字失败
@@ -544,5 +549,6 @@ class OneBotEventMixin(OneBotServerMixin):
         await self._deliver_pending_anima(websocket, event, conversation_id)
         await self._deliver_pending_minimax_draw(websocket, event, conversation_id)
         await self._deliver_pending_paper_digest(websocket, event, conversation_id)
+        await self._deliver_pending_documents(websocket, event, conversation_id)
 
 

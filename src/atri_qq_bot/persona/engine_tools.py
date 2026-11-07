@@ -28,6 +28,9 @@ def _tool_action_summary(name: str, arguments: dict[str, Any]) -> str:
         return f"检索了记忆「{query[:40]}」" if query else "检索了记忆"
     if name == "search_papers":
         return f"检索了论文「{query[:40]}」" if query else "检索了论文"
+    if name == "send_document":
+        title = str(arguments.get("title") or "").strip()
+        return f"整理了文档「{title[:40]}」（系统会自动送达）" if title else "整理了文档（系统会自动送达）"
     if name == "bilibili_read":
         video = str(arguments.get("video") or "").strip()
         return f"解析了B站视频 {video[:40]}" if video else "解析了B站视频"
@@ -630,6 +633,8 @@ class EngineToolsMixin(PersonaEngineMixin):
             return await self._execute_paper_search_tool(conversation_id, arguments, config)
         if name == "compile_paper_digest":
             return await self._execute_paper_digest_tool(conversation_id, arguments, config)
+        if name == "send_document":
+            return await self._execute_send_document_tool(conversation_id, arguments, config)
         if name.startswith("qzone_"):
             return await self._execute_qzone_tool(conversation_id, name, arguments, config)
         return None
@@ -693,7 +698,65 @@ class EngineToolsMixin(PersonaEngineMixin):
             return f"论文检索执行失败：{exc}。不要编造论文，坦诚说明没查到。"
         if data.get("ok"):
             service.remember_search(conversation_id, data)
+            # 确定性契约：检索成功即自动生成概要文档并入队，投递由
+            # OneBot 层在文字回复发出后消费。文档是否输出不依赖模型
+            # 是否二次调用 compile_paper_digest（实测模型经常不调）。
+            digest = self._auto_queue_paper_digest(service, conversation_id, data)
+            if digest is not None:
+                data["digest"] = digest
         return _json.dumps(data, ensure_ascii=False)
+
+    def _auto_queue_paper_digest(
+        self,
+        service: Any,
+        conversation_id: str,
+        data: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        """检索成功后自动排版概要文档并入队投递，返回给模型的说明。
+
+        元数据全部来自本次检索结果原样转写（零编造、无模型综述）；
+        生成失败只降级为「本次没有文档」，绝不影响检索结果本身。
+        """
+        from pathlib import Path as _Path
+
+        from ..config.env import _project_root as _project_root_for_digest
+        from ..papers import build_paper_digest
+
+        papers = [p for p in (data.get("papers") or []) if isinstance(p, dict)]
+        if not papers:
+            return None
+        output_dir = _project_root_for_digest() / "data" / "runtime" / "paper_digests"
+        try:
+            result = build_paper_digest(
+                query=str(data.get("query") or ""),
+                sort=str(data.get("sort") or "relevance"),
+                papers=papers,
+                summary="",
+                output_dir=output_dir,
+            )
+        except Exception as exc:
+            LOGGER.warning("论文概要文档自动生成失败：conversation=%s error=%s", conversation_id, exc)
+            return {
+                "auto_generated": False,
+                "note": "概要文档自动生成失败，本次没有文档；不要谎称会发送文件。",
+            }
+        if not result.get("ok"):
+            LOGGER.warning(
+                "论文概要文档自动生成失败：conversation=%s error=%s",
+                conversation_id,
+                result.get("error"),
+            )
+            return {
+                "auto_generated": False,
+                "note": "概要文档自动生成失败，本次没有文档；不要谎称会发送文件。",
+            }
+        service.queue_digest_delivery(conversation_id, _Path(result["path"]))
+        return {
+            "auto_generated": True,
+            "file": result["name"],
+            "count": result["count"],
+            "note": "系统已自动生成论文概要文档，将在你的回复发出后发送给用户；回复里可顺带提一句文档随后就到，不要谎称已发出。",
+        }
 
     async def _execute_paper_digest_tool(
         self,
@@ -752,6 +815,50 @@ class EngineToolsMixin(PersonaEngineMixin):
                 "file": result["name"],
                 "count": result["count"],
                 "delivery": "文件将在本次回复发出后自动发送，回复里说明即可，不要谎称已发出。",
+            },
+            ensure_ascii=False,
+        )
+
+    async def _execute_send_document_tool(
+        self,
+        conversation_id: str,
+        arguments: dict[str, Any],
+        config: Any,
+    ) -> str:
+        import json as _json
+        from pathlib import Path as _Path
+
+        from ..config.env import _project_root as _project_root_for_document
+        from ..documents import build_text_document, get_documents_service
+
+        service = get_documents_service(config)
+        if service is None:
+            return "文档输出功能未启用，请直接用文字回复，不要承诺发文件。"
+        title = str(arguments.get("title") or "").strip()
+        content = str(arguments.get("content") or "").strip()
+        if not title or not content:
+            return (
+                "title 或 content 为空。请补全后重新调用，"
+                "不要只口头承诺发文档。"
+            )
+        output_dir = _project_root_for_document() / "data" / "runtime" / "documents"
+        try:
+            result = build_text_document(
+                title=title,
+                content=content,
+                output_dir=output_dir,
+            )
+        except Exception as exc:
+            return f"文档生成失败：{exc}。不要谎称已发送，向用户坦诚说明。"
+        if not result.get("ok"):
+            return f"文档生成失败：{result.get('error')}。不要谎称已发送。"
+        service.queue_delivery(conversation_id, _Path(result["path"]))
+        return _json.dumps(
+            {
+                "ok": True,
+                "format": result["format"],
+                "file": result["name"],
+                "delivery": "文件将在本次回复发出后自动发送，回复里说明发的是什么即可，不要谎称已发出。",
             },
             ensure_ascii=False,
         )

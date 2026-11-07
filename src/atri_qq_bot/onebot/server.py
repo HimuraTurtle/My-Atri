@@ -97,6 +97,7 @@ from .server_parts.server_bilibili import OneBotBilibiliMixin
 from .server_parts.server_avatar import OneBotAvatarMixin
 from .server_parts.server_connection import OneBotConnectionMixin
 from .server_parts.server_delivery import OneBotDeliveryMixin
+from .server_parts.server_documents import OneBotDocumentsMixin
 from .server_parts.server_events import OneBotEventMixin
 from .server_parts.server_image_edit import OneBotImageEditMixin
 from .server_parts.server_manga import OneBotMangaMixin
@@ -118,6 +119,7 @@ class OneBotServer(
     OneBotAnimaMixin,
     OneBotMinimaxDrawMixin,
     OneBotPapersMixin,
+    OneBotDocumentsMixin,
     OneBotBilibiliMixin,
     OneBotAvatarMixin,
     OneBotImageEditMixin,

@@ -33,6 +33,38 @@ _DSML_BLOCK_RE = re.compile(
 )
 _DSML_TAG_RE = re.compile(rf"</?{_DSML_BARS}DSML{_DSML_BARS}[^>]*>")
 
+# 反谎言守卫：模型回复承诺「文档随后就到/整理好发你」，但本轮没有
+# 任何文档工具成功回执（send_document / compile_paper_digest，或已
+# 自动附带概要文档的 search_papers）——这是实测反复出现的虚假承诺
+# （模型口头答应却从不调工具），必须在回复发出前拦下重答。
+_DOCUMENT_DELIVERING_TOOLS = frozenset(
+    {"send_document", "compile_paper_digest", "search_papers"}
+)
+_DOCUMENT_PROMISE_PATTERNS = (
+    re.compile(r"文档.{0,8}(?:随后|马上|稍后|这就).{0,6}(?:到|给你|发你|送达)"),
+    re.compile(r"(?:随后|马上|稍后|这就).{0,6}(?:给你|发你|发送).{0,8}(?:文档|概要|总结)"),
+    re.compile(r"(?:整理|总结|写)(?:好|完)(?:了)?(?:就)?(?:给你|发你)"),
+    re.compile(r"文档(?:已经|已)(?:发送|发|生成|整理)"),
+)
+_DOCUMENT_HONEST_FAILURE_RE = re.compile(r"(?:没|未)(?:能|成功)|失败|生成不了|没生成")
+_DOCUMENT_CONDITIONAL_RE = re.compile(r"要的话|想要的话")
+
+
+def has_document_promise_without_receipt(
+    text: str, successful_tools: set[str] | frozenset[str]
+) -> bool:
+    """回复承诺送达文档但本轮没有文档工具成功回执时为真。"""
+    normalized = re.sub(r"\s+", "", str(text or ""))
+    if not normalized:
+        return False
+    if _DOCUMENT_DELIVERING_TOOLS & set(successful_tools):
+        return False
+    if _DOCUMENT_HONEST_FAILURE_RE.search(normalized):
+        return False
+    if _DOCUMENT_CONDITIONAL_RE.search(normalized):
+        return False
+    return any(pattern.search(normalized) for pattern in _DOCUMENT_PROMISE_PATTERNS)
+
 
 def _dsml_value(raw: str, is_string: str | None) -> Any:
     value = raw.strip()

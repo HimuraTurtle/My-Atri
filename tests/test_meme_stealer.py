@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import time
 import os
 import random
 from types import SimpleNamespace
@@ -702,7 +703,9 @@ def test_sidecar_terms_cached_and_invalidated(tmp_path) -> None:
     manager._sidecar_terms(image)
     assert manager._sidecar_cache[image] is cached
 
-    # sidecar 更新后缓存失效。
+    # Windows 文件时钟有 ~15ms 粒度，两次写 sidecar 若落在同一刻度，
+    # st_mtime_ns 不变会导致缓存不失效——间隔一个刻度再重写。
+    time.sleep(0.02)
     image.with_suffix(image.suffix + ".json").write_text(
         json.dumps(
             {"emotion": "teasing", "tags": ["新标签"], "desc": "", "scenes": []},

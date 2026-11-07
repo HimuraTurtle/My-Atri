@@ -207,6 +207,194 @@ class TestService:
         assert result["papers"][0]["title"] == "Valid"
 
 
+class TestCitationDigest:
+    """题录概要确定性触发：解析、抓取与 OneBot 侧挂接线。"""
+
+    _EVIDENCED_MESSAGE = (
+        "Alotaibi, O., Pardede, E., & Tomy, S. (2023). Cleaning big data "
+        "streams: A systematic literature review. Technologies, 11(4), "
+        "Article 101. https://doi.org/10.3390/technologies11040101\n"
+        "atri帮我看看这篇文章呗，顺便输出一份概要"
+    )
+
+    def test_parse_evidenced_message_returns_doi_url(self):
+        from atri_qq_bot.papers.citation import parse_citation_digest_request
+
+        assert (
+            parse_citation_digest_request(self._EVIDENCED_MESSAGE)
+            == "https://doi.org/10.3390/technologies11040101"
+        )
+
+    def test_parse_supports_common_identifier_forms(self):
+        from atri_qq_bot.papers.citation import parse_citation_digest_request
+
+        assert parse_citation_digest_request(
+            "10.1038/s41586-021-03819-2 帮我整理个概要"
+        ) == "https://doi.org/10.1038/s41586-021-03819-2"
+        assert parse_citation_digest_request(
+            "https://arxiv.org/abs/2301.12345 总结成文档"
+        ) == "https://arxiv.org/abs/2301.12345"
+        assert parse_citation_digest_request(
+            "arXiv:2301.12345 输出一份综述概要"
+        ) == "https://arxiv.org/abs/2301.12345"
+
+    def test_parse_rejects_missing_intent_or_identifier(self):
+        from atri_qq_bot.papers.citation import parse_citation_digest_request
+
+        # 有标识无意图：只是聊这篇论文，不产出文件。
+        assert parse_citation_digest_request(
+            "https://doi.org/10.1038/x 这篇讲什么的"
+        ) is None
+        # 有意图无标识：不是题录场景。
+        assert parse_citation_digest_request("帮我总结一下今天的安排") is None
+        # 任意网址但 OpenAlex 反解不了。
+        assert parse_citation_digest_request(
+            "https://example.com/paper.html 整理概要"
+        ) is None
+
+    def test_parse_rejects_negated_intent(self):
+        from atri_qq_bot.papers.citation import parse_citation_digest_request
+
+        # 「不用整理文档」：否定词后的整理/文档都算被否定。
+        assert (
+            parse_citation_digest_request("10.1038/x 不用整理文档，说说就行") is None
+        )
+        assert parse_citation_digest_request("10.1038/x 别发文档") is None
+        # 否定之后再提出的新意图仍然有效。
+        assert (
+            parse_citation_digest_request("10.1038/x 不用全文，但是要一份概要")
+            == "https://doi.org/10.1038/x"
+        )
+
+    def test_fetch_work_returns_normalized_paper(self):
+        svc = PapersService(_config())
+
+        async def fake_fetch(identifier, timeout):
+            assert identifier.startswith("https://doi.org/")
+            return _work(title="Cleaning Big Data Streams", year=2023)
+
+        svc._fetch_work = fake_fetch
+        result = asyncio.run(svc.fetch_work("https://doi.org/10.3390/technologies11040101"))
+        assert result["ok"] is True
+        paper = result["paper"]
+        assert paper["title"] == "Cleaning Big Data Streams"
+        assert paper["year"] == 2023
+        assert paper["abstract"] == "Hello world graph"
+
+    def test_fetch_work_failure_and_validation(self):
+        svc = PapersService(_config())
+
+        async def raise_fetch(identifier, timeout):
+            raise RuntimeError("timeout")
+
+        svc._fetch_work = raise_fetch
+        result = asyncio.run(svc.fetch_work("https://doi.org/10.1038/x"))
+        assert result["ok"] is False
+        assert "失败" in result["error"]
+
+        async def empty_fetch(identifier, timeout):
+            return {}
+
+        svc._fetch_work = empty_fetch
+        result = asyncio.run(svc.fetch_work("https://doi.org/10.1038/x"))
+        assert result["ok"] is False
+        assert "未找到" in result["error"]
+
+        result = asyncio.run(svc.fetch_work("10.1038/x"))
+        assert result["ok"] is False
+
+    def _wiring_holder(self, service):
+        from atri_qq_bot.onebot.server_parts.server_papers import OneBotPapersMixin
+
+        class Holder(OneBotPapersMixin):
+            def __init__(self):
+                self.config = _config(papers_enabled=True)
+
+        return Holder()
+
+    def test_maybe_queue_citation_digest_end_to_end(self, monkeypatch, tmp_path):
+        service = PapersService(_config())
+        holder = self._wiring_holder(service)
+
+        async def fake_fetch(identifier, timeout):
+            return _work(title="Cleaning Big Data Streams", year=2023)
+
+        service._fetch_work = fake_fetch
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: service
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.config.env, "_project_root", lambda: tmp_path
+        )
+        asyncio.run(
+            holder._maybe_queue_citation_digest(
+                {}, self._EVIDENCED_MESSAGE, "private:2578607322"
+            )
+        )
+        queued = service.consume_digest_deliveries("private:2578607322")
+        assert len(queued) == 1
+        # 真实落盘的概要文档可打开且包含题录信息。
+        with zipfile.ZipFile(queued[0]) as archive:
+            document = archive.read("word/document.xml").decode("utf-8")
+        assert "Cleaning Big Data Streams" in document
+        assert (tmp_path / "data" / "runtime" / "paper_digests").exists()
+
+    def test_maybe_queue_skips_on_fetch_failure(self, monkeypatch):
+        service = PapersService(_config())
+        holder = self._wiring_holder(service)
+
+        async def failing_fetch(identifier, timeout):
+            raise RuntimeError("network down")
+
+        service._fetch_work = failing_fetch
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: service
+        )
+        asyncio.run(
+            holder._maybe_queue_citation_digest(
+                {}, self._EVIDENCED_MESSAGE, "private:1"
+            )
+        )
+        assert service.consume_digest_deliveries("private:1") == []
+
+    def test_maybe_queue_skips_when_no_trigger(self, monkeypatch):
+        service = PapersService(_config())
+        holder = self._wiring_holder(service)
+
+        async def spy_fetch(identifier, timeout):
+            raise AssertionError("不应发起抓取")
+
+        service._fetch_work = spy_fetch
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: service
+        )
+        asyncio.run(holder._maybe_queue_citation_digest({}, "今天天气如何", "private:1"))
+        asyncio.run(
+            holder._maybe_queue_citation_digest(
+                {}, "https://doi.org/10.1038/x 这篇讲什么", "private:1"
+            )
+        )
+        assert service.consume_digest_deliveries("private:1") == []
+
+    def test_maybe_queue_skips_when_papers_disabled(self, monkeypatch):
+        service = PapersService(_config())
+        holder = self._wiring_holder(service)
+
+        async def spy_fetch(identifier, timeout):
+            raise AssertionError("不应发起抓取")
+
+        service._fetch_work = spy_fetch
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: None
+        )
+        asyncio.run(
+            holder._maybe_queue_citation_digest(
+                {}, self._EVIDENCED_MESSAGE, "private:1"
+            )
+        )
+        assert service.consume_digest_deliveries("private:1") == []
+
+
 class TestSchema:
     def test_schema_registered_when_enabled(self):
         schemas = available_tool_schemas(_config())
@@ -228,6 +416,23 @@ class TestSchema:
         assert params["required"] == ["query"]
         assert props["sort"]["enum"] == ["relevance", "newest", "cited"]
         assert props["limit"]["maximum"] == 8
+
+    def test_search_description_locks_auto_digest_contract(self):
+        schemas = available_tool_schemas(_config())
+        tool = next(t for t in schemas if t["function"]["name"] == "search_papers")
+        description = tool["function"]["description"]
+        # 检索成功自动发概要文档的系统契约必须写进工具描述，
+        # 否则模型可能在回复里谎称文件状态或冗余调用整理工具。
+        assert "自动" in description and "概要文档" in description
+        assert "不要谎称文件已发出" in description
+
+    def test_digest_description_locks_curation_role(self):
+        schemas = available_tool_schemas(_config())
+        tool = next(t for t in schemas if t["function"]["name"] == "compile_paper_digest")
+        description = tool["function"]["description"]
+        # 基础概要已随检索自动发送，整理工具重定位为定制版（精选/综述）。
+        assert "自动发送过" in description
+        assert "定制版" in description
 
 
 class TestExecutor:
@@ -253,25 +458,39 @@ class TestExecutor:
         )
         assert "query 为空" in result
 
-    def test_success_returns_json_payload(self, monkeypatch):
-        engine = self._engine()
-
+    def _stub_service(self, result=None):
         class StubService:
             def __init__(self):
-                self.remembered = []
+                self.queued = []
 
             async def search(self, query, limit=5, sort="relevance"):
-                assert query == "graph"
-                assert limit == 3
-                return {"ok": True, "count": 1, "papers": [{"title": "Paper"}]}
+                return result
 
             def remember_search(self, conversation_id, payload):
-                self.remembered.append((conversation_id, payload))
+                self.remembered = [(conversation_id, payload)]
 
-        stub = StubService()
+            def queue_digest_delivery(self, conversation_id, path):
+                self.queued.append((conversation_id, path))
+
+        return StubService()
+
+    def test_success_returns_json_payload(self, monkeypatch, tmp_path):
+        engine = self._engine()
+        stub = self._stub_service(
+            result={"ok": True, "query": "graph", "sort": "cited", "count": 1,
+                    "papers": [{"title": "Paper"}]}
+        )
         monkeypatch.setattr(
             atri_qq_bot.papers, "get_papers_service", lambda config: stub
         )
+        target = tmp_path / "auto.docx"
+        target.write_bytes(b"PK")
+
+        def fake_build(*, query, sort, papers, summary, output_dir):
+            return {"ok": True, "format": "docx", "path": str(target),
+                    "name": target.name, "count": len(papers)}
+
+        monkeypatch.setattr(atri_qq_bot.papers, "build_paper_digest", fake_build)
         result = asyncio.run(
             engine._execute_paper_search_tool(
                 "private:1", {"query": "graph", "limit": 3, "sort": "cited"}, _config()
@@ -281,6 +500,130 @@ class TestExecutor:
         assert payload["ok"] is True
         assert payload["papers"][0]["title"] == "Paper"
         assert stub.remembered == [("private:1", payload)]
+
+    def test_success_auto_generates_and_queues_digest(self, monkeypatch, tmp_path):
+        engine = self._engine()
+        stub = self._stub_service(
+            result={"ok": True, "query": "graph", "sort": "cited", "count": 2,
+                    "papers": [{"title": "Paper 1"}, {"title": "Paper 2"}]}
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: stub
+        )
+        target = tmp_path / "auto.docx"
+        target.write_bytes(b"PK")
+        captured = {}
+
+        def fake_build(*, query, sort, papers, summary, output_dir):
+            captured.update(query=query, sort=sort, papers=papers, summary=summary)
+            return {"ok": True, "format": "docx", "path": str(target),
+                    "name": target.name, "count": len(papers)}
+
+        monkeypatch.setattr(atri_qq_bot.papers, "build_paper_digest", fake_build)
+        result = asyncio.run(
+            engine._execute_paper_search_tool(
+                "private:1", {"query": "graph", "limit": 3, "sort": "cited"}, _config()
+            )
+        )
+        payload = json.loads(result)
+        # 概要文档参数全部来自本次检索结果原样转写，综述留空。
+        assert captured["query"] == "graph"
+        assert captured["sort"] == "cited"
+        assert [p["title"] for p in captured["papers"]] == ["Paper 1", "Paper 2"]
+        assert captured["summary"] == ""
+        assert payload["digest"]["auto_generated"] is True
+        assert payload["digest"]["file"] == "auto.docx"
+        assert payload["digest"]["count"] == 2
+        assert "不要谎称已发出" in payload["digest"]["note"]
+        assert stub.queued == [("private:1", Path(str(target)))]
+
+    def test_auto_digest_exception_degrades_without_breaking_search(self, monkeypatch):
+        engine = self._engine()
+        stub = self._stub_service(
+            result={"ok": True, "query": "graph", "sort": "relevance", "count": 1,
+                    "papers": [{"title": "Paper"}]}
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: stub
+        )
+
+        def broken_build(*args, **kwargs):
+            raise RuntimeError("disk full")
+
+        monkeypatch.setattr(atri_qq_bot.papers, "build_paper_digest", broken_build)
+        result = asyncio.run(
+            engine._execute_paper_search_tool("private:1", {"query": "graph"}, _config())
+        )
+        payload = json.loads(result)
+        # 检索结果不受概要文档失败影响，但模型必须知道本次没有文档。
+        assert payload["ok"] is True
+        assert payload["papers"][0]["title"] == "Paper"
+        assert payload["digest"]["auto_generated"] is False
+        assert "不要谎称会发送文件" in payload["digest"]["note"]
+        assert stub.queued == []
+
+    def test_auto_digest_error_result_degrades_without_queue(self, monkeypatch):
+        engine = self._engine()
+        stub = self._stub_service(
+            result={"ok": True, "query": "graph", "sort": "relevance", "count": 1,
+                    "papers": [{"title": "Paper"}]}
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: stub
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.papers,
+            "build_paper_digest",
+            lambda **kwargs: {"ok": False, "error": "没有可整理的论文"},
+        )
+        result = asyncio.run(
+            engine._execute_paper_search_tool("private:1", {"query": "graph"}, _config())
+        )
+        payload = json.loads(result)
+        assert payload["ok"] is True
+        assert payload["digest"]["auto_generated"] is False
+        assert stub.queued == []
+
+    def test_empty_papers_skips_auto_digest(self, monkeypatch):
+        engine = self._engine()
+        stub = self._stub_service(
+            result={"ok": True, "query": "graph", "sort": "relevance", "count": 0,
+                    "papers": []}
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: stub
+        )
+        builds = []
+
+        def spy_build(**kwargs):
+            builds.append(kwargs)
+            return {"ok": True, "format": "docx", "path": "x", "name": "x", "count": 0}
+
+        monkeypatch.setattr(atri_qq_bot.papers, "build_paper_digest", spy_build)
+        result = asyncio.run(
+            engine._execute_paper_search_tool("private:1", {"query": "graph"}, _config())
+        )
+        payload = json.loads(result)
+        assert payload["ok"] is True
+        assert "digest" not in payload
+        assert builds == []
+        assert stub.queued == []
+
+    def test_failed_search_skips_auto_digest(self, monkeypatch):
+        engine = self._engine()
+        stub = self._stub_service(
+            result={"ok": False, "error": "OpenAlex 接口调用失败"}
+        )
+        monkeypatch.setattr(
+            atri_qq_bot.papers, "get_papers_service", lambda config: stub
+        )
+        result = asyncio.run(
+            engine._execute_paper_search_tool("private:1", {"query": "graph"}, _config())
+        )
+        payload = json.loads(result)
+        assert payload["ok"] is False
+        assert "digest" not in payload
+        assert stub.queued == []
 
     def test_service_error_bubbles_as_notice(self, monkeypatch):
         engine = self._engine()
