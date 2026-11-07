@@ -30,6 +30,8 @@ data/stickers/_chat_history/
 data/stickers/_deleted/
 data/stickers/unsorted/
 data/stickers/**/steal_*
+# 表情包小偷/自动抓取的哈希命名图片（MD5/SHA 名，私密，勿入库）
+data/stickers/*/[0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f][0-9a-f]*
 data/voice/cache/
 data/voice/profiles/
 data/voice/references/
