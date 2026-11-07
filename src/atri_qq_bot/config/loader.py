@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from dotenv import load_dotenv
 
@@ -34,7 +35,13 @@ def _resolve_deepseek_search_key() -> str | None:
         return explicit
     vision_base_url = _env("TOOLBOX_VISION_BASE_URL", "").strip()
     vision_key = _optional_env("TOOLBOX_VISION_API_KEY")
-    if vision_key and "api.deepseek.com" in vision_base_url:
+    if not vision_key or not vision_base_url:
+        return None
+    try:
+        hostname = (urlsplit(vision_base_url).hostname or "").casefold()
+    except ValueError:
+        hostname = ""
+    if hostname == "api.deepseek.com":
         return vision_key
     return None
 
@@ -68,6 +75,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
         bot_qq=bot_qq,
         host=_env("HOST", "127.0.0.1"),
         port=_env_int("PORT", 8765),
+        onebot_access_token=_optional_env("ONEBOT_ACCESS_TOKEN"),
         reply_mode=reply_mode,
         openai_api_key=openai_api_key,
         openai_base_url=openai_base_url,

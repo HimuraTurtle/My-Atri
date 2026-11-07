@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+from urllib.parse import parse_qsl, urlsplit
+
+from ...runtime.local_access import host_is_loopback, origin_is_loopback
 from .server_support import OneBotServerMixin, _sync_server_globals
 
 
@@ -60,9 +63,57 @@ class OneBotConnectionMixin(OneBotServerMixin):
             getattr(config, "owner_qqs", ()),
         )
 
+    def _websocket_handshake_allowed(self, websocket: Any) -> bool:
+        """OneBot 反向 WS 的握手准入：路径、Host、Origin 与可选 token。
+
+        浏览器发起的 WebSocket 一定带 Origin 头，而 NapCat 等非浏览器
+        客户端通常不带。因此「缺 Origin 或回环 Origin」放行，其余拒绝；
+        同时要求 Host 为回环、路径为 /onebot，堵住 DNS 重绑定与跨站
+        WebSocket 劫持（CSWSH）。配置了 access_token 时还必须校验 token。
+        """
+        request = getattr(websocket, "request", None)
+        if request is None:
+            # 测试桩/兼容调用没有真实握手对象，无法检查；真实 websockets
+            # 握手一定携带 request，生产路径不会走到这里。
+            return True
+        raw_path = str(getattr(request, "path", "") or "")
+        try:
+            path_only = urlsplit(raw_path).path or "/"
+        except ValueError:
+            path_only = "/"
+        if path_only != "/onebot":
+            return False
+        headers = getattr(request, "headers", None)
+        get_header = getattr(headers, "get", None)
+        if not callable(get_header):
+            return False
+        if not host_is_loopback(get_header("Host")):
+            return False
+        if not origin_is_loopback(get_header("Origin")):
+            return False
+        token = str(getattr(self.config, "onebot_access_token", "") or "").strip()
+        if not token:
+            return True
+        if str(get_header("Authorization") or "") == f"Bearer {token}":
+            return True
+        try:
+            query = urlsplit(raw_path).query
+            params = parse_qsl(query, keep_blank_values=True)
+        except ValueError:
+            params = []
+        return any(key == "access_token" and value == token for key, value in params)
+
     async def handle_connection(self, websocket: Any, path: str | None = None) -> None:
         # NapCat 是反向 WebSocket 客户端：连接建立后持续接收事件，并主动探测
         # get_status。连接存在不等于 QQ 已登录，健康状态还要参考 online/good 回执。
+        if not self._websocket_handshake_allowed(websocket):
+            LOGGER.warning(
+                "拒绝未授权 OneBot 连接：remote=%s",
+                getattr(websocket, "remote_address", "unknown"),
+            )
+            with contextlib.suppress(Exception):
+                await websocket.close(code=1008, reason="Forbidden")
+            return
         LOGGER.info("NapCat 已连接：remote=%s", getattr(websocket, "remote_address", "unknown"))
         self._active_websockets.add(websocket)
         publish_napcat_runtime_state("probing", detail="NapCat 已连接，正在确认 QQ 登录状态")

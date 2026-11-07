@@ -56,8 +56,8 @@ class DesktopPetStatus:
             bot_qq=int(payload.get("bot_qq") or 0),
             napcat_state=str(payload.get("napcat_state") or "disconnected"),
             napcat_detail=str(payload.get("napcat_detail") or ""),
-            # 与项目 WebUI 使用同一份只读 NapCat 配置，链接含 Token，
-            # 仅在本机“状态详情”中展示，不能用于气泡或日志。
+            # 与项目 WebUI 使用同一份只读 NapCat 配置；链接不含 Token，
+            # 打开 NapCat WebUI 后按 webui.json 中的 Token 登录。
             napcat_webui_url=str(napcat_webui.get("url") or ""),
             napcat_webui_reachable=bool(napcat_webui.get("reachable")),
             maibot_webui_url=str(maibot_webui.get("url") or ""),

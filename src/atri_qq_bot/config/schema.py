@@ -28,6 +28,9 @@ class BotConfig:
     openai_model: str
     temperature: float
     max_tokens: int
+    # 可选：OneBot v11 access_token。配置后 WebSocket 握手必须携带匹配的
+    # Authorization Bearer 或 access_token 查询参数，否则拒绝连接。
+    onebot_access_token: str | None = None
     frequency_penalty: float = 0.25
     # 单次模型请求和 GPU 排队分别设上限，避免一个失败轮次拖住整个会话。
     chat_request_timeout_seconds: float = 25.0
@@ -229,6 +232,9 @@ class BotConfig:
     # 用户找论文/文献/研究进展时由聊天模型自主调用。
     papers_enabled: bool = True
     papers_timeout_seconds: float = 30.0
+    # 通用文档输出：send_document 工具，把聊天中整理的内容排版成
+    # Word 文档发送；论文检索的概要文档由 papers 模块自动交付。
+    documents_enabled: bool = True
     # QQ 空间（移植自 astrbot_plugin_qzone，会话复用版）：不再独立登录，
     # Cookie 通过 OneBot get_cookies 从 NapCat 按需借取，无独立保活。
     qzone_enabled: bool = False

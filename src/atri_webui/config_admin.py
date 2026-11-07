@@ -128,7 +128,9 @@ def write_env(values: dict[str, str]) -> None:
 def normalize_env_value(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
-    return str(value).strip()
+    text = str(value).strip()
+    # 防御 .env 注入：值内换行会在 write_env 里被拆成新行，必须移除。
+    return text.replace("\r", " ").replace("\n", " ")
 
 
 def mask_secret(value: str) -> str:

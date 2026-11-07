@@ -16,7 +16,6 @@ from datetime import datetime
 from logging import Handler, LogRecord
 from pathlib import Path
 from typing import Any
-from urllib.parse import quote
 
 from dotenv import dotenv_values
 
@@ -123,9 +122,9 @@ def napcat_webui_access() -> dict[str, Any]:
     port = int(payload.get("port") or 6099)
     token = str(payload.get("token") or "")
     local_host = "127.0.0.1" if host in {"::", "0.0.0.0", "localhost"} else host
+    # Token 相当于 NapCat 管理密码：绝不拼进 url 回传，避免经 /api/status
+    # 或桌宠状态面板泄露。需要登录时请从 webui.json 直接读取。
     url = f"http://{local_host}:{port}/webui"
-    if token:
-        url += f"?token={quote(token, safe='')}"
     return {
         "configured": not bool(payload.get("disableWebUI", False)),
         "reachable": _port_reachable(local_host, port),

@@ -5,6 +5,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from atri_qq_bot.runtime.control import restart_background_services
+from atri_qq_bot.runtime.local_access import host_is_loopback, origin_is_loopback
 
 from ..config_admin import config_payload
 from ..minecraft_admin import minecraft_dashboard
@@ -17,7 +18,26 @@ class HandlerCoreMixin:
     def log_message(self, format: str, *args: Any) -> None:
         return
 
+    def _ensure_local_request(self) -> bool:
+        """只接受本机回环请求，防御 DNS 重绑定与本机 CSRF。
+
+        Host 必须是回环地址（堵死 DNS 重绑定）；写操作若携带 Origin，
+        也必须是回环来源（堵死跨站表单/脚本触发的 CSRF）。非浏览器客户端
+        不带 Origin，仍然放行，因此不影响桌宠与本地脚本。
+        """
+        if not host_is_loopback(self.headers.get("Host")):
+            self._send_error(HTTPStatus.FORBIDDEN, "forbidden host")
+            return False
+        if self.command in {"POST", "PUT", "DELETE", "PATCH"}:
+            origin = self.headers.get("Origin")
+            if origin and not origin_is_loopback(origin):
+                self._send_error(HTTPStatus.FORBIDDEN, "forbidden origin")
+                return False
+        return True
+
     def do_GET(self) -> None:
+        if not self._ensure_local_request():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/":
             return self._send_html(_render_index_dynamic())
@@ -100,6 +120,8 @@ class HandlerCoreMixin:
         self._send_error(HTTPStatus.NOT_FOUND, "not found")
 
     def do_POST(self) -> None:
+        if not self._ensure_local_request():
+            return
         parsed = urlparse(self.path)
         if parsed.path == "/api/config":
             return self._handle_config_update()
