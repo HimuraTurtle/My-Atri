@@ -10,7 +10,7 @@
   │    └─ 项目 WebUI :8787
   ├─ napcat：项目专用 NapCat + QQ
   │    └─ NapCat WebUI :6099
-  ├─ optional：聊天连接后错峰启动 QZone Bridge :5700 / MaiBot :8001
+  ├─ optional：聊天连接后错峰启动 MaiBot :8001（QZone Bridge 已弃用，默认不启动）
   └─ 按需：Ollama :11434 / 语音服务 :8790
 ```
 
@@ -38,7 +38,7 @@
 | ATRI OneBot | `ws://127.0.0.1:8765/onebot` | NapCat 反向 WS 客户端，不是浏览器页面 |
 | 项目 WebUI | `http://127.0.0.1:8787` | 模型、记忆、语音、评测、群聊总结和状态 |
 | NapCat WebUI | `http://127.0.0.1:6099/webui?token=…` | QQ/NapCat 配置与实时日志 |
-| QZone Bridge（可选） | `http://127.0.0.1:5700` | WebUI 人工读取、点赞和评论 QQ 空间动态 |
+| QZone Bridge（已弃用） | `http://127.0.0.1:5700` | 第三方 onebot-qzone 桥接；对他人动态的自动点赞/评论有封号风险，默认关闭（`QZONE_BRIDGE_ENABLED=false`），不再启动 |
 | 语音服务 | `http://127.0.0.1:8790/health` | 健康检查 |
 | Ollama | `http://127.0.0.1:11434` | 本地模型服务 |
 
