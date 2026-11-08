@@ -356,6 +356,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
             30.0, min(300.0, _env_float("ISITTRUE_TIMEOUT_SECONDS", 120.0))
         ),
         papers_enabled=_env_bool("PAPERS_ENABLED", True),
+        documents_enabled=_env_bool("DOCUMENTS_ENABLED", True),
         papers_timeout_seconds=max(
             10.0, min(60.0, _env_float("PAPERS_TIMEOUT_SECONDS", 30.0))
         ),

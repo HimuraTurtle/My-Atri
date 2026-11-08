@@ -1112,7 +1112,6 @@ _docx_text_part_names = _toolbox_office_docs._docx_text_part_names
 _docx_xml_to_text = _toolbox_office_docs._docx_xml_to_text
 _read_xlsx_sheet_refs = _toolbox_office_docs._read_xlsx_sheet_refs
 _read_xlsx_shared_strings = _toolbox_office_docs._read_xlsx_shared_strings
-_first_xlsx_sheet_name = _toolbox_office_docs._first_xlsx_sheet_name
 _read_xlsx_sheet_rows = _toolbox_office_docs._read_xlsx_sheet_rows
 
 

@@ -90,12 +90,6 @@ def _read_xlsx_shared_strings(archive: zipfile.ZipFile) -> list[str]:
             strings.append("".join(node.text or "" for node in item.iter() if node.tag.endswith("}t")))
     return strings
 
-def _first_xlsx_sheet_name(archive: zipfile.ZipFile) -> str:
-    for name in archive.namelist():
-        if name.startswith("xl/worksheets/sheet") and name.endswith(".xml"):
-            return name
-    raise KeyError("没有找到工作表")
-
 def _read_xlsx_sheet_rows(
     archive: zipfile.ZipFile,
     sheet_name: str,
