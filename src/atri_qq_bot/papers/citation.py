@@ -63,3 +63,66 @@ def parse_citation_digest_request(text: str) -> str | None:
     if not text or not _intent_is_affirmed(text):
         return None
     return _canonical_identifier(text)
+
+# ---- 一般论文检索意图（无 DOI/arXiv 标识）----
+
+_PAPER_SEARCH_PREFIXES = (
+    "帮我", "给我", "麻烦", "请你", "请", "我想", "想", "要",
+    "写一篇", "写一下", "整理一下", "总结一下", "查一下", "搜一下", "找一下",
+    "关于", "有关于", "最近", "最新", "相关", "一下",
+)
+_PAPER_SEARCH_VERB = r"(?:查|找|搜|检索|搜索|看看|了解|推荐|介绍|整理|总结|有什么)"
+
+
+def _clean_paper_query(raw: str) -> str:
+    text = re.sub(r"[，。！？、；：,.!?;:]+", " ", str(raw or "")).strip()
+    text = re.sub(r"\s+", " ", text).strip()
+    changed = True
+    while changed:
+        changed = False
+        for prefix in _PAPER_SEARCH_PREFIXES:
+            if text.startswith(prefix):
+                text = text[len(prefix):].strip()
+                changed = True
+                break
+    text = re.sub(
+        r"(的最新|的相关|的研究|的论文|的文献|方面|领域|方向|相关)$", "", text
+    ).strip()
+    text = text.strip("的").strip()
+    return text if 2 <= len(text) <= 80 else ""
+
+
+def parse_paper_search_request(text: str) -> str | None:
+    """从消息中解析「一般论文检索」意图并返回检索词，否则 None。
+
+    这是论文查询的确定性兜底：意图明确时（如「帮我查图神经网络的论文」、
+    「大模型综述」）不经聊天模型直接检索，避免模型漏调 search_papers。
+    带 DOI/arXiv 的消息由 parse_citation_digest_request 处理，这里不触发。
+    """
+    normalized = " ".join(str(text or "").split()).strip()
+    if len(normalized) < 3:
+        return None
+    match = re.search(
+        _PAPER_SEARCH_VERB
+        + r"(?:一下|几篇|一些|最近|最新|相关|关于)?"
+        + r"(.{2,60}?)"
+        + r"(?:的|方面|领域|方向|相关)?"
+        + r"(?:论文|文献|paper|papers)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if match:
+        query = _clean_paper_query(match.group(1))
+        if query:
+            return query
+    match = re.search(
+        r"(.{2,60}?)(?:的)?(?:研究进展|研究现状|文献综述|综述|survey|review)",
+        normalized,
+        re.IGNORECASE,
+    )
+    if match:
+        query = _clean_paper_query(match.group(1))
+        if query:
+            return query
+    return None
+

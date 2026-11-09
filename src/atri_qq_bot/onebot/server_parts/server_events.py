@@ -210,6 +210,12 @@ class OneBotEventMixin(OneBotServerMixin):
         # 确定性侧挂入口——不消耗消息，直接按标识符抓 OpenAlex 元数据
         # 生成概要文档入队；文字回复照常走模型，文件在回复后投递。
         await self._maybe_queue_citation_digest(event, plain_text, conversation_id)
+        # 论文检索确定性侧挂：意图明确时直接检索并生成概要文档入队，
+        # 返回的检索结果上下文在下方注入聊天模型，供其直接总结，
+        # 不再依赖模型是否调用 search_papers 工具。
+        paper_search_context = await self._maybe_queue_paper_search(
+            event, plain_text, conversation_id
+        )
 
         # 常见点歌表达在聊天模型之前处理。它们只读取完整音乐目录中的成品，
         # 不受模型工具调用、TTS 开关或群聊提示词影响，也不会用文字假装唱歌。
@@ -398,9 +404,15 @@ class OneBotEventMixin(OneBotServerMixin):
                 observed=True,
                 tool_context=tool_context,
                 reply_focus=group_reply_focus,
-                context_system=(
-                    prepared_who_is_who.context_text if prepared_who_is_who else None
-                ),
+                context_system="\n\n".join(
+                    part
+                    for part in (
+                        prepared_who_is_who.context_text if prepared_who_is_who else None,
+                        paper_search_context,
+                    )
+                    if part
+                )
+                or None,
             )
         except Exception as exc:
             LOGGER.exception("回复引擎异常：conversation=%s", conversation_id)

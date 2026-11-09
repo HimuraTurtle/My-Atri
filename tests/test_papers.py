@@ -265,6 +265,24 @@ class TestCitationDigest:
             parse_citation_digest_request("10.1038/x 不用全文，但是要一份概要")
             == "https://doi.org/10.1038/x"
         )
+    def test_parse_paper_search_request_extracts_query(self):
+        from atri_qq_bot.papers.citation import parse_paper_search_request
+
+        assert parse_paper_search_request("帮我查图神经网络的论文") == "图神经网络"
+        assert parse_paper_search_request("找几篇关于知识图谱的文献") == "知识图谱"
+        assert parse_paper_search_request("搜一下 transformer 论文") == "transformer"
+        assert parse_paper_search_request("大模型综述") == "大模型"
+        assert parse_paper_search_request("图神经网络研究进展") == "图神经网络"
+        assert parse_paper_search_request("有什么关于强化学习的论文推荐") == "强化学习"
+
+    def test_parse_paper_search_request_rejects_non_paper(self):
+        from atri_qq_bot.papers.citation import parse_paper_search_request
+
+        assert parse_paper_search_request("帮我查一下今天天气") is None
+        assert parse_paper_search_request("找一下我的钥匙") is None
+        assert parse_paper_search_request("今天心情不好") is None
+        assert parse_paper_search_request("晚上吃什么") is None
+        assert parse_paper_search_request("帮我看看这篇文章 10.1038/x") is None
 
     def test_fetch_work_returns_normalized_paper(self):
         svc = PapersService(_config())
@@ -1001,3 +1019,67 @@ class TestDigestDeliveryMixin:
             )
         )
         assert calls["n"] == 2  # 第二次是失败提示文案
+
+
+class TestPaperSearchIntentSidecar:
+    """一般论文检索意图的确定性侧挂（无 DOI/arXiv 标识）。"""
+
+    def _holder(self):
+        from atri_qq_bot.onebot.server_parts.server_papers import OneBotPapersMixin
+
+        class Holder(OneBotPapersMixin):
+            def __init__(self):
+                self.config = _config()
+                self.model_name = "test-model"
+
+            def _delivery_model_name(self, model_type):
+                return self.model_name
+
+        return Holder()
+
+    def test_sidecar_returns_context_and_queues_digest(self, monkeypatch, tmp_path):
+        holder = self._holder()
+        service = PapersService(_config())
+
+        async def fake_search(query, limit=5, sort="relevance"):
+            return {
+                "ok": True, "query": query, "sort": sort, "count": 1,
+                "papers": [{
+                    "title": "GNN Survey", "authors": "Alice, Bob",
+                    "year": 2022, "venue": "Nature", "cited_by_count": 42,
+                    "abstract": "A survey of graph neural networks",
+                }],
+            }
+
+        service.search = fake_search
+        monkeypatch.setattr(atri_qq_bot.papers, "get_papers_service", lambda config: service)
+        fake_digest = {"ok": True, "format": "md", "path": str(tmp_path / "d.md"), "name": "d.md", "count": 1}
+        monkeypatch.setattr(atri_qq_bot.papers, "build_paper_digest", lambda **kw: fake_digest)
+
+        context = asyncio.run(
+            holder._maybe_queue_paper_search({}, "帮我查图神经网络的论文", "private:1")
+        )
+        assert context is not None
+        assert "图神经网络" in context
+        assert "GNN Survey" in context
+        queued = service.consume_digest_deliveries("private:1")
+        assert [str(p) for p in queued] == [str(tmp_path / "d.md")]
+
+    def test_sidecar_skips_citation_identifier(self, monkeypatch):
+        holder = self._holder()
+        service = PapersService(_config())
+        monkeypatch.setattr(atri_qq_bot.papers, "get_papers_service", lambda config: service)
+        context = asyncio.run(
+            holder._maybe_queue_paper_search({}, "帮我看看这篇 10.1038/x 整理概要", "private:1")
+        )
+        assert context is None
+
+    def test_sidecar_noop_on_non_paper(self, monkeypatch):
+        holder = self._holder()
+        service = PapersService(_config())
+        monkeypatch.setattr(atri_qq_bot.papers, "get_papers_service", lambda config: service)
+        context = asyncio.run(
+            holder._maybe_queue_paper_search({}, "晚上吃什么", "private:1")
+        )
+        assert context is None
+
