@@ -98,16 +98,15 @@ class OneBotPapersMixin(OneBotServerMixin):
         if service is None:
             return
         for path in service.consume_digest_deliveries(conversation_id):
-            try:
-                await self.send_reply(
-                    websocket,
-                    event,
-                    [OutgoingMessage("file", str(path))],
-                    model_type="chat",
-                    model_name=self._delivery_model_name("chat"),
-                )
-            except Exception:
-                LOGGER.exception(
+            delivered = await self.send_reply(
+                websocket,
+                event,
+                [OutgoingMessage("file", str(path))],
+                model_type="chat",
+                model_name=self._delivery_model_name("chat"),
+            )
+            if not delivered:
+                LOGGER.warning(
                     "论文整理文档投递失败：conversation=%s file=%s",
                     conversation_id,
                     path,

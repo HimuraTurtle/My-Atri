@@ -284,6 +284,7 @@ class TestDeliveryMixin:
             ):
                 for message in messages:
                     self.sent.append((message.kind, message.content))
+                return "ok"
 
         return Holder()
 
@@ -327,7 +328,7 @@ class TestDeliveryMixin:
         async def flaky_send(websocket, event, messages, model_type=None, model_name=None):
             calls["n"] += 1
             if calls["n"] == 1:
-                raise RuntimeError("upload failed")
+                return ""
 
         holder.send_reply = flaky_send
         asyncio.run(

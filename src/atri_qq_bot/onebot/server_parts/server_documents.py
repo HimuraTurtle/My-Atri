@@ -31,28 +31,24 @@ class OneBotDocumentsMixin(OneBotServerMixin):
         if service is None:
             return
         for path in service.consume_deliveries(conversation_id):
-            try:
-                await self.send_reply(
-                    websocket,
-                    event,
-                    [OutgoingMessage("file", str(path))],
-                    model_type="chat",
-                    model_name=self._delivery_model_name("chat"),
-                )
-            except Exception:
-                LOGGER.exception(
+            delivered = await self.send_reply(
+                websocket,
+                event,
+                [OutgoingMessage("file", str(path))],
+                model_type="chat",
+                model_name=self._delivery_model_name("chat"),
+            )
+            if not delivered:
+                LOGGER.warning(
                     "文档投递失败：conversation=%s file=%s",
                     conversation_id,
                     path,
                 )
-                try:
-                    await self.send_reply(
-                        websocket,
-                        event,
-                        [OutgoingMessage("text", "文档发送失败了，稍后再让我试一次吧。")],
-                        model_type="chat",
-                        model_name=self._delivery_model_name("chat"),
-                    )
-                except Exception:
-                    LOGGER.exception("文档投递失败提示发送失败")
+                await self.send_reply(
+                    websocket,
+                    event,
+                    [OutgoingMessage("text", "文档发送失败了，稍后再让我试一次吧。")],
+                    model_type="chat",
+                    model_name=self._delivery_model_name("chat"),
+                )
                 return

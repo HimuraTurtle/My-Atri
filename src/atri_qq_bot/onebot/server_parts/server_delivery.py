@@ -250,6 +250,10 @@ class OneBotDeliveryMixin(OneBotServerMixin):
 
             if message.kind == "text":
                 delivered_parts.append(message.content)
+            elif message.kind == "file":
+                # 文件投递成功也追加一个占位，使返回值能区分成功/失败；
+                # 否则 send_reply 对 file 恒返回空串，调用方无法感知上传失败。
+                delivered_parts.append(message.kind)
             elif message.kind == "record" and fallback_text:
                 delivered_parts.append(fallback_text)
 
