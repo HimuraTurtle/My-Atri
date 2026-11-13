@@ -25,7 +25,9 @@ class ScreenWatchStore:
         self._lock = threading.RLock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.row_factory = sqlite3.Row
-        self._last_pruned_at = 0.0
+        # None = 从未清理过，首次写入必清理（0.0 哨兵在刚开机的
+        # Windows 机器上会让首次清理被 monotonic 节流跳过）。
+        self._last_pruned_at: float | None = None
         self._init_db()
 
     def _init_db(self) -> None:
@@ -63,7 +65,10 @@ class ScreenWatchStore:
     def _maybe_prune(self) -> None:
         """每 24 小时至多清一次过期摘要（节流写，不额外起定时器）。"""
         now = time.monotonic()
-        if now - self._last_pruned_at < self._PRUNE_INTERVAL_SECONDS:
+        if (
+            self._last_pruned_at is not None
+            and now - self._last_pruned_at < self._PRUNE_INTERVAL_SECONDS
+        ):
             return
         self._last_pruned_at = now
         cutoff = time.time() - self._RETENTION_DAYS * 86400.0

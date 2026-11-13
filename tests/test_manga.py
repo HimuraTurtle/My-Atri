@@ -64,6 +64,8 @@ class FakeClient:
             11: Manga(id=11, source_id=1, url="u", title="一拳超人", status="ONGOING"),
             12: Manga(id=12, source_id=1, url="u", title="进击的巨人", status="COMPLETED"),
         }
+        # 在线源可搜到、但不在本地库的作品（Suwayomi 本地 mangas 查询搜不到）
+        self.online_mangas: dict[int, Manga] = {}
         self.chapters: dict[int, list[Chapter]] = {
             11: [make_chapter(101, 1.0), make_chapter(102, 2.0), make_chapter(103, 3.0)],
         }
@@ -82,11 +84,13 @@ class FakeClient:
                 self.mangas = mangas
 
         query = query.replace("+", " ").strip()
-        matches = [m for m in self.mangas.values() if query and query in m.title]
+        pool = list(self.mangas.values()) + list(self.online_mangas.values())
+        # 源端搜索对大小写不敏感（模拟 copy_manga 服务端模糊匹配）
+        matches = [m for m in pool if query and query.lower() in m.title.lower()]
         return _Result(matches)
 
     async def get_manga(self, manga_id: int) -> Manga:
-        manga = self.mangas.get(int(manga_id))
+        manga = self.mangas.get(int(manga_id)) or self.online_mangas.get(int(manga_id))
         if manga is None:
             from atri_qq_bot.manga.client import SuwayomiError
 

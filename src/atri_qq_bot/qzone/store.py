@@ -49,7 +49,10 @@ class QzoneStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._lock = threading.RLock()
-        self._last_pruned_at = 0.0
+        # None = 从未清理过，首次写入必清理。不能用 0.0 当哨兵：
+        # time.monotonic() 在 Windows 上是开机秒数，刚重启的机器上
+        # now - 0.0 < 间隔恒成立，首次清理会被跳过整整一个开机日。
+        self._last_pruned_at: float | None = None
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -161,7 +164,10 @@ class QzoneStore:
     def _maybe_prune_logs(self) -> None:
         """每 24 小时至多清一次过期动作日志（节流写，不额外起定时器）。"""
         now = time.monotonic()
-        if now - self._last_pruned_at < self._PRUNE_INTERVAL_SECONDS:
+        if (
+            self._last_pruned_at is not None
+            and now - self._last_pruned_at < self._PRUNE_INTERVAL_SECONDS
+        ):
             return
         self._last_pruned_at = now
         cutoff = time.time() - self._LOG_RETENTION_DAYS * 86400.0

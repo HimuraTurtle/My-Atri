@@ -81,6 +81,38 @@ class OneBotMangaMixin(OneBotServerMixin):
                 await self._deliver_manga_notification(websocket, notification)
         return True
 
+    async def _maybe_handle_manga_read_request(
+        self,
+        websocket: Any,
+        event: dict[str, Any],
+        plain_text: str,
+        conversation_id: str,
+    ) -> bool:
+        """自然语言看漫画请求（「我想看XX的第N话」）的确定性入口。
+
+        实测聊天模型对这类请求只口头承诺不调工具，漫画永远不送达。
+        这里解析出标题与话数后合成「漫画 阅读」命令，复用既有命令
+        管道（模糊搜索/章节投递/账本记录）；消息被消耗，不再走模型。
+        """
+        service = self.manga
+        if service is None or service.is_command(plain_text):
+            return False
+
+        from ...manga.nl_read import parse_read_request
+
+        parsed = parse_read_request(plain_text)
+        if parsed is None:
+            return False
+        title, num = parsed
+        synthetic = f"漫画 阅读 {title} {num}"
+        LOGGER.info(
+            "自然语言看漫画请求：conversation=%s text=%r -> %r",
+            conversation_id, plain_text[:60], synthetic,
+        )
+        return await self._maybe_handle_manga_command(
+            websocket, event, synthetic, conversation_id
+        )
+
     _MANGA_LEDGER_SUBCOMMANDS = ("阅读", "下载", "搜索", "章节")
 
     def _record_manga_command_action(

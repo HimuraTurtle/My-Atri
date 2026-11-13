@@ -25,6 +25,8 @@ from .packer import (
     pack_images,
     parse_download_args,
 )
+from .alias import expand_title_aliases
+from .style import style_feedback
 from .service import (
     fmt_chapter_display,
     fmt_chapter_label,
@@ -34,6 +36,7 @@ from .service import (
     normalize_zh,
     resolve_chapter,
     select_search_sources,
+    title_matches_query,
 )
 from .store import MangaStore
 
@@ -188,9 +191,56 @@ class MangaService:
             mangas = await self.client.search_manga_by_title(name_or_id)
         except Exception as exc:
             LOGGER.warning("resolve_manga 查找失败: %s", exc)
-            return None, "查找漫画失败。"
+            return None, await style_feedback(
+                self.config, "唔…漫画服务好像连不上\n等会儿再喊我一次吧"
+            )
         if len(mangas) == 0:
-            return None, "未找到该漫画。"
+            # 本地库没命中时回退在线源搜索（与批量订阅同一通道），
+            # 没订阅过的作品也能直接阅读/下载。源端是模糊搜索，标题
+            # 归一化互验后才采纳；同一作品常有多个译名（「学生会也有
+            # 洞」在源上叫「脑洞学生会」），首查未验过时让模型把搜索
+            # 目标加工成译名集合，先复验首查结果、再逐个别名查询。
+            candidates = [name_or_id]
+            best, _best_err = await self.search_best_match(name_or_id)
+            if best is not None and title_matches_query(name_or_id, best.title):
+                LOGGER.info(
+                    "resolve_manga 在线源命中：%s -> 「%s」", name_or_id, best.title
+                )
+                return best, None
+            aliases = await expand_title_aliases(self.config, name_or_id)
+            if aliases:
+                candidates.extend(aliases)
+                if best is not None and any(
+                    title_matches_query(alias, best.title) for alias in aliases
+                ):
+                    LOGGER.info(
+                        "resolve_manga 译名复验命中：%s -> 「%s」（别名 %r）",
+                        name_or_id,
+                        best.title,
+                        aliases,
+                    )
+                    return best, None
+                for alias in aliases:
+                    alt, _alt_err = await self.search_best_match(alias)
+                    if alt is not None and any(
+                        title_matches_query(c, alt.title) for c in candidates
+                    ):
+                        LOGGER.info(
+                            "resolve_manga 译名查询命中：%s（%r）-> 「%s」",
+                            name_or_id,
+                            alias,
+                            alt.title,
+                        )
+                        return alt, None
+            if best is not None:
+                LOGGER.warning(
+                    "resolve_manga 在线源结果不匹配，放弃：%s -> 「%s」",
+                    name_or_id,
+                    best.title,
+                )
+            return None, await style_feedback(
+                self.config, "诶？这本没搜到呀\n换个名字试试，或用「漫画 搜索」挑挑"
+            )
         if len(mangas) == 1:
             return mangas[0], None
 
@@ -335,7 +385,14 @@ class MangaService:
         try:
             return await handler(raw, conversation_id)
         except SuwayomiError as exc:
-            return self._result([OutgoingMessage("text", f"漫画服务暂时不可用：{exc}")])
+            return self._result([
+                OutgoingMessage(
+                    "text",
+                    await style_feedback(
+                        self.config, f"漫画服务暂时不可用：{exc}"
+                    ),
+                )
+            ])
         except Exception as exc:
             LOGGER.exception("漫画命令处理失败：%s", exc)
             return self._result([OutgoingMessage("text", "漫画命令执行失败，请稍后重试。")])
@@ -606,7 +663,7 @@ class MangaService:
 
         manga, err = await self.resolve_manga(name_or_id, conversation_id, "章节")
         if err or manga is None:
-            return self._result([OutgoingMessage("text", err or "未找到该漫画。")])
+            return self._result([OutgoingMessage("text", err or "诶？这本没搜到呀")])
 
         chapters = await self.get_or_fetch_chapters(manga.id, force=force)
         if not chapters:
@@ -659,7 +716,7 @@ class MangaService:
 
         manga, err = await self.resolve_manga(name_or_id, conversation_id, "阅读")
         if err or manga is None:
-            return self._result([OutgoingMessage("text", err or "未找到该漫画。")])
+            return self._result([OutgoingMessage("text", err or "诶？这本没搜到呀")])
 
         chapters = await self.get_or_fetch_chapters(manga.id)
         self.remember_exposed_chapters(
@@ -686,7 +743,7 @@ class MangaService:
 
         manga, err = await self.resolve_manga(name_or_id, conversation_id, "下载")
         if err or manga is None:
-            return self._result([OutgoingMessage("text", err or "未找到该漫画。")])
+            return self._result([OutgoingMessage("text", err or "诶？这本没搜到呀")])
 
         chapters = await self.get_or_fetch_chapters(manga.id)
         self.remember_exposed_chapters(

@@ -140,6 +140,30 @@ def _bounded_int(value, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(parsed, maximum))
 
 
+def _normalize_title_key(text: str) -> str:
+    """标题归一化：忽略大小写与标点，只留字母数字与中日韩字符。"""
+    text = str(text or "").casefold()
+    return "".join(
+        ch for ch in text if ch.isalnum() or "\u4e00" <= ch <= "\u9fff"
+    )
+
+
+def title_matches_query(query: str, title: str) -> bool:
+    """在线源搜索结果的标题与查询是否真正对应。
+
+    源端是模糊搜索，实测「学生会也有洞」会返回「脑洞学生会」这类
+    不相关结果——首结果盲信会把错的漫画整话发给用户。这里归一化
+    后要求互为子串（大小写、书名号、斜杠、全半角标点都不挡路：
+    「死神bleach」↔「死神/BLEACH（全彩版）」应命中），否则视为
+    不匹配，宁可坦诚说没搜到也不送错。
+    """
+    q = _normalize_title_key(query)
+    t = _normalize_title_key(title)
+    if len(q) < 2 or len(t) < 2:
+        return False
+    return q in t or t in q
+
+
 def select_search_sources(
     sources: list[Source],
     source_hint: str,

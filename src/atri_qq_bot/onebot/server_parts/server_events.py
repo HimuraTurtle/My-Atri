@@ -193,6 +193,11 @@ class OneBotEventMixin(OneBotServerMixin):
         if await self._maybe_handle_manga_command(websocket, event, plain_text, conversation_id):
             return
 
+        # 自然语言看漫画请求（「我想看XX的第N话」）：确定性拦截，合成
+        # 「漫画 阅读」命令复用既有管道；不依赖模型是否调用漫画工具。
+        if await self._maybe_handle_manga_read_request(websocket, event, plain_text, conversation_id):
+            return
+
         # B站总结/解析命令（B站总结 <链接>）与漫画命令同级的确定性入口。
         if await self._maybe_handle_bilibili_command(websocket, event, plain_text, conversation_id):
             return
