@@ -21,6 +21,11 @@ _BOT_MUTEX_HANDLE: int | None = None
 _CRASH_LOG_FILE = None
 
 
+def _milky_mode_enabled() -> bool:
+    """MILKY_ENABLED 为真时走 Milky 接入（Lagrange.Milky），否则走 OneBot。"""
+    return os.getenv("MILKY_ENABLED", "").strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _acquire_bot_mutex() -> bool:
     """防止桌宠、启动器和手动命令并发拉起多个 ATRI 进程。"""
     if os.name != "nt":
@@ -80,7 +85,13 @@ def main() -> None:
         logger.warning("NapCat WebUI 未就绪：%s", access.get("reason", "未知原因"))
     try:
         logger.info("启动 OneBot 服务：ws://%s:%s/onebot", config.host, config.port)
-        asyncio.run(run_server(config))
+        if _milky_mode_enabled():
+            from .milky import run_milky_server
+
+            logger.info("检测到 MILKY_ENABLED，启动 Milky 接入模式")
+            asyncio.run(run_milky_server(config))
+        else:
+            asyncio.run(run_server(config))
     except KeyboardInterrupt:
         logger.info("收到停止信号，ATRI 已退出")
 
