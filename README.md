@@ -428,9 +428,18 @@ NapCat 的 OneBot 反向 WebSocket 已经自动配置为：`ws://127.0.0.1:8765/
 2. Python 环境：虚拟环境 + 依赖安装（可选清华镜像）、`.env` 生成、交互填写 `BOT_QQ`
 3. 协议端：NapCat 检测与下载引导，`NAPCAT_DIR` 自动写入 `.env`
 4. 启动验证：拉起 ATRI + QQ 扫码登录，自动轮询 8765 连接
-5. 可选组件：桌宠快捷方式、开机自启、Ollama 与 DeepSeek key 说明
+5. 可选组件：桌宠快捷方式、开机自启（计划任务，见下）、Ollama 与 DeepSeek key 说明
 
 各阶段幂等，中断后重跑会自动跳过已完成步骤；安装日志见 `tools/install/install.log`。
+
+### 开机自启（计划任务 + 全栈监护）
+
+2026-11-15 重做：旧方案（启动文件夹 `ATRI Watchdog.lnk` → watchdog 只守 ATRI）有两个致命缺陷——实测重启后 .lnk 未生效守卫直接消失；就算生效也只拉 ATRI、不拉 NapCat/QQ，开机后 bot 在 QQ 上仍不在线。新方案：
+
+- **注册**：`tools/launch/install_autostart.ps1`（安装向导阶段 5 自动调用，也可单独重跑，幂等）。注册计划任务「ATRI Watchdog」：当前用户登录后延迟 30 秒触发，`ExecutionTimeLimit=PT0S` 无限期（默认 72 小时会把常驻守卫杀掉，`[TimeSpan]::Zero` 会序列化成 `00:00:00` 被任务 XML 拒绝，故走 `-Xml` 注册）；同时清理旧 .lnk。
+- **守卫升级**（`watchdog.ps1 -Guard`）：从「Start-Process -Wait 事件驱动只等 ATRI 退出」改为 10 秒轮询的**全栈监护**——ATRI 进程死了拉起（保留崩溃连击退避，只统计守卫自己拉起的实例）；NapCat 未连上 8765 就触发 `hidden_launcher napcat` 恢复分片（自带互斥幂等，5 分钟重试冷却），配合 NapCat `autoLoginAccount` 快速登录实现**零扫码自动回连**。轮询换事件驱动的原因：`-Wait` 会阻塞到 ATRI 退出，同一线程根本没机会监护第二样东西。
+- **单实例检查修复**：去掉「扫描其它 powershell 命令行含 watchdog.ps1 -Guard 则退出」的预检查——任何碰巧含这些字样的终端（如开着曾运行过该命令的窗口）都会让新守卫误判已有实例而自杀（2026-11-13 自启失效的直接死因之一）；Global 互斥锁（内核级）是权威判据，足矣。
+- **验证路径**（2026-11-15 实测全过）：`Start-ScheduledTask` 触发 → 守卫拉起并发现 NapCat 未连接 → 恢复分片 → NapCat 自动快速登录回连（状态 `connected`）→ 手杀 ATRI → 守卫 10 秒内拉起新实例 → NapCat 5 秒重连。
 
 ### 方式二：手动安装
 
