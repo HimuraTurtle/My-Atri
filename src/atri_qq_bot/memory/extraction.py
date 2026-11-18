@@ -14,6 +14,7 @@ class MemoryExtractionMixin(MemoryMixin):
         visibility: str,
         source_context: str | None,
         scope_kind: str,
+        actor_name: str | None = None,
     ) -> None:
         """把画像提取放入有界后台队列。
 
@@ -48,6 +49,7 @@ class MemoryExtractionMixin(MemoryMixin):
             visibility=visibility,
             source_context=source_context,
             scope_kind=scope_kind,
+            actor_name=str(actor_name).strip() or None if actor_name else None,
         )
         if self._memory_worker.submit(request):
             LOGGER.debug("记忆提取任务已入队 conversation=%s scope=%s", conversation_id, scope_kind)
@@ -77,6 +79,11 @@ class MemoryExtractionMixin(MemoryMixin):
             return
         memory_ids: list[str] = []
         for operation in result.operations:
+            # 群主会话的确定性操作也带归属：worker 的 deterministic 路径
+            # 不产 actor 字段，默认配置（llm 关闭）下漏补会让按人隔离
+            # 的候选与无后缀的晋升条目并存，隔离完全失效。
+            if request.scope_kind == "group" and request.actor_name:
+                operation.setdefault("actor_name", str(request.actor_name)[:40])
             # core 的操作入口接收 conversation item，并在内部取出
             # item["structured_memory"]；不能把已经取出的 memory 再传进去，
             # 否则会意外生成 structured_memory.structured_memory 嵌套树。

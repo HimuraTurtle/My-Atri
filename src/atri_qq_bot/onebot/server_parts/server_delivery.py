@@ -4,6 +4,11 @@ from ...music.online import resolve_online_singing
 from .server_support import OneBotServerMixin, _sync_server_globals
 
 
+def _delivered_so_far(delivered_parts: list[str]) -> str:
+    """多段发送中断时已送达内容的拼接；一段没成时返回空串。"""
+    return "\n".join(part for part in delivered_parts if part).strip()
+
+
 class OneBotDeliveryMixin(OneBotServerMixin):
     async def send_group_summary(self, group_id: str, image_path: str) -> None:
         """将总结 PNG 作为 QQ 图片消息发送到对应群聊。"""
@@ -153,6 +158,14 @@ class OneBotDeliveryMixin(OneBotServerMixin):
         if not hasattr(self, "_last_poke_reply_at"):
             self._last_poke_reply_at = {}
         self._last_poke_reply_at[key] = now
+        # 戳一戳来自不定量群友，键空间无界：超限时按时间戳淘汰最旧条目，
+        # 防止退群/换号用户的 entry 永久累积。
+        if len(self._last_poke_reply_at) > 1024:
+            stale_keys = sorted(
+                self._last_poke_reply_at, key=self._last_poke_reply_at.get
+            )[: len(self._last_poke_reply_at) - 1024]
+            for stale_key in stale_keys:
+                self._last_poke_reply_at.pop(stale_key, None)
         return True
 
     def _remember_pending_group_visual(self, event: dict[str, Any]) -> None:
@@ -243,16 +256,20 @@ class OneBotDeliveryMixin(OneBotServerMixin):
                             fallback_exc,
                         )
                         await self._mark_napcat_manual_login_required()
-                        return ""
+                        return _delivered_so_far(delivered_parts)
                     return str(fallback_text).strip()
                 await self._mark_napcat_manual_login_required()
-                return ""
+                # 多段部分成功不能被记成整体失败：已送达的分段原样返回，
+                # 全部失败时才返回空串（调用方以空串判定「未确认」）。
+                return _delivered_so_far(delivered_parts)
 
             if message.kind == "text":
                 delivered_parts.append(message.content)
-            elif message.kind == "file":
-                # 文件投递成功也追加一个占位，使返回值能区分成功/失败；
-                # 否则 send_reply 对 file 恒返回空串，调用方无法感知上传失败。
+            elif message.kind in {"file", "image", "sticker", "face"}:
+                # 文件/图片/本地表情投递成功也追加一个占位，使返回值能区分
+                # 成功/失败；否则 send_reply 对这些 kind 恒返回空串，调用方
+                # 无法感知上传失败——anima/minimax 的「发送失败提示」曾因此
+                # 永远不可达。占位符仅作信号，记录侧负责剔除。
                 delivered_parts.append(message.kind)
             elif message.kind == "record" and fallback_text:
                 delivered_parts.append(fallback_text)
@@ -415,7 +432,9 @@ class OneBotDeliveryMixin(OneBotServerMixin):
             publish_onebot_probe_result(False, detail=detail, self_id=self.config.bot_qq)
             self._onebot_probe_failures += 1
             raise
-        self._onebot_probe_failures = 0
+        # 发送成功只发布观测事件，不清零探测失败计数：该计数属于健康探测
+        # 循环（连续 N 次探测失败 → 提示扫码），被高频发送稀释会让
+        # login_required 状态难以稳定出现。
         publish_onebot_probe_result(
             True,
             detail="QQ 消息发送成功",

@@ -141,7 +141,10 @@ class MemoryStateMixin(MemoryMixin):
                 delay,
             )
             return False
-        except (OSError, TypeError, ValueError) as exc:
+        except (OSError, TypeError, ValueError, RuntimeError) as exc:
+            # RuntimeError 兜底 json.dump 的「dictionary changed size during
+            # iteration」：并发写入方若漏持进程锁，序列化迭代会中途炸出该
+            # 异常；按同一契约退避重试，绝不中断当前回复。
             self._save_failure_count += 1
             delay = min(
                 SAVE_RETRY_MAX_SECONDS,

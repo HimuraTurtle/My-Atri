@@ -351,9 +351,10 @@ class OneBotProactiveMixin(OneBotServerMixin):
                     )
                     self.reply_engine.mark_group_proactive(conversation_id)
                     self.reply_engine.record_bot_reply(conversation_id, text)
-                    print(f"[onebot] Group proactive nudge sent to {group_id}.")
+                    LOGGER.info("群聊主动消息已发送至 %s。", group_id)
                 except Exception as exc:
-                    print(f"[onebot] Group proactive send failed: {exc}")
+                    # 后台运行（pythonw）时 print 不可见且与模块告诫矛盾；统一走日志。
+                    LOGGER.warning("群聊主动消息发送失败：%s", exc)
                     break
 
     def _first_active_websocket(self) -> Any | None:

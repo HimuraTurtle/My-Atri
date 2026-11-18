@@ -11,7 +11,7 @@ import os
 from dataclasses import dataclass
 
 
-DEFAULT_BASE_URL = "http://127.0.0.1:8081"
+DEFAULT_BASE_URL = "http://127.0.0.1:3000"
 
 
 @dataclass(frozen=True)

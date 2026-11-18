@@ -13,10 +13,17 @@ def _sync_module_globals() -> None:
 
 _sync_module_globals()
 
+from ..text_units import (
+    has_question_mark,
+    last_sentence_boundary,
+    mask_urls,
+    split_sentences,
+)
 from .reply_rules import (
     _accepted_correction_reply,
     _asks_for_direct_suggestion,
     _asks_for_stance,
+    _cleanse_owner_address,
     _direct_answer_override,
     _emotional_fallback_reply,
     _has_concrete_suggestion,
@@ -38,16 +45,21 @@ from .reply_rules import (
 def _trim_extra_questions(text: str, keep_questions: int = 1) -> str:
     # 逐行修剪：多行分条形态（每行一条消息）下行边界必须保留，
     # 不能把两行问题粘成一行；无换行输入与旧逻辑等价。
+    # 问句判定用 URL 感知实现：链接查询串里的 `?` 不是问句，
+    # 否则含 URL 的句子会被整句丢弃、留下残缺碎片。
     lines = [line for line in str(text or "").split("\n") if line.strip()]
     kept_lines: list[str] = []
     questions = 0
     for line in lines:
         kept_sentences: list[str] = []
         for sentence in _split_sentences(line):
-            if "?" in sentence or "？" in sentence:
+            if has_question_mark(sentence):
                 questions += 1
                 if questions > keep_questions:
                     continue
+                # 保留的问句把强调式「？？？」折叠回单个问号——连续问号在
+                # 计数上是一个问题，输出形态也应一致。
+                sentence = re.sub(r"[?？]{2,}", "？", sentence)
             kept_sentences.append(sentence)
         kept_line = "".join(kept_sentences).strip()
         if kept_line:
@@ -56,15 +68,15 @@ def _trim_extra_questions(text: str, keep_questions: int = 1) -> str:
 
 
 def _split_sentences(text: str) -> list[str]:
-    pieces = re.findall(r"[^。！？!?；;\n]+[。！？!?；;]?", text)
-    return [piece.strip() for piece in pieces if piece.strip()]
+    # URL 内的 `?` 不切句、收尾引号归前句；共享实现见 text_units。
+    return split_sentences(text)
 
 
 def _direct_suggestion_fallback(user_text: str) -> str:
     if "吃什么" in user_text or "晚饭" in user_text:
         return "我会选热一点、好消化的：西红柿炒鸡蛋，或者粥配一点肉和青菜。今晚别太折腾，吃完舒服最重要。"
     if "推荐" in user_text and any(word in user_text for word in ("吃", "饭", "夜宵", "早餐", "午饭")):
-        return "我推荐、螃蟹、或者粥配青菜和肉。亚托莉的偏好很明确：先吃热的，别拿零食糊弄自己。"
+        return "我会推荐螃蟹，或者粥配青菜和肉。亚托莉的偏好很明确：先吃热的，别拿零食糊弄自己。"
     if "怎么启动" in user_text:
         return "像平时一样启动 QQ 就行。亚托莉的后台监听会自动拉起 NapCat 和聊天服务；如果 QQ 要扫码，就登录你的机器人 QQ。"
     if "怎么办" in user_text or "怎么做" in user_text:
@@ -139,10 +151,15 @@ def _fit_reply_with_sources(text: str, sources: list[str], limit: int = 1200) ->
 
 def _looks_incomplete_reply(text: str) -> bool:
     compact = str(text or "").rstrip()
-    if compact.endswith(("...", "…", "，", ",", "：", ":", "；", ";")):
+    if not compact:
+        return True
+    # URL 原位遮蔽后再做标点/括号判定：链接里的 `?`、`()`、尾部的 `.`、`,`
+    # 都不是截断证据，不能让一条带链接的完整回复被误判成未完成。
+    masked = mask_urls(compact)
+    if masked.endswith(("...", "…", "，", ",", "：", ":", "；", ";")):
         return True
     opening_pairs = (("（", "）"), ("(", ")"), ("【", "】"), ("[", "]"), ("“", "”"))
-    return any(compact.count(left) > compact.count(right) for left, right in opening_pairs)
+    return any(masked.count(left) > masked.count(right) for left, right in opening_pairs)
 
 
 def _repair_incomplete_reply(text: str) -> str:
@@ -155,27 +172,36 @@ def _repair_incomplete_reply(text: str) -> str:
 
     # 多行分条形态（说话方式：每行一条消息）下，未完成只可能是末行：
     # 前面的行是已发出的独立短消息，不能因为末行截断被整段丢弃。
+    # 末行先走单行修复（补全/剥悬挂连接词），修不出可用内容才丢弃——
+    # 「今天早点休息 + 晚安……」不该整行蒸发，而单行形态同样内容能被保住。
     if "\n" in compact:
-        lines = [line for line in compact.split("\n") if line.strip()]
-        while lines and _looks_incomplete_reply(lines[-1]):
-            lines.pop()
-        if lines:
-            return "\n".join(lines)
+        lines_kept = [line for line in compact.split("\n") if line.strip()]
+        while lines_kept and _looks_incomplete_reply(lines_kept[-1]):
+            repaired_last = _repair_incomplete_reply(lines_kept[-1])
+            if repaired_last:
+                lines_kept[-1] = repaired_last
+                break
+            lines_kept.pop()
+        if lines_kept:
+            return "\n".join(lines_kept)
         # 全部行都不完整：压回单段文本，交回单行修复路径处理。
         joined = "".join(line.strip() for line in compact.split("\n") if line.strip())
         return _repair_incomplete_reply(joined)
 
     # Prefer an already completed sentence over inventing a continuation.
-    boundary = max(compact.rfind(mark) for mark in ("。", "！", "？", "!", "?"))
+    # 句界取 URL 之外的最后一个句末标点，避免把切点落进链接内部。
+    boundary = last_sentence_boundary(compact)
     if boundary >= max(8, int(len(compact) * 0.35)):
         return compact[: boundary + 1].rstrip()
 
-    candidate = compact.rstrip(".……，,：:；; ")
+    candidate = compact.rstrip(".…，,：:； ")
     for dangling in ("然后", "但是", "所以", "因为", "而且", "比如", "包括", "以及"):
         if candidate.endswith(dangling):
-            candidate = candidate[: -len(dangling)].rstrip("，,：:；; ")
+            candidate = candidate[: -len(dangling)].rstrip("，,：:； ")
             break
-    if len(candidate) < 6:
+    # 说话方式以 1~20 字短句为主：剥掉悬挂连接词后剩下的实词（「晚安」）
+    # 是一条完整的消息，不应因不足 6 字被丢弃。
+    if len(candidate) < 2:
         return ""
 
     for left, right in (("（", "）"), ("(", ")"), ("【", "】"), ("[", "]"), ("“", "”")):
@@ -185,7 +211,6 @@ def _repair_incomplete_reply(text: str) -> str:
     if not candidate.endswith(("。", "！", "？", "!", "?")):
         candidate += "。"
     return candidate
-
 
 def _redact_sensitive_output(text: str, *, is_group: bool) -> str:
     value = str(text or "")
@@ -393,6 +418,7 @@ def _persona_repair_fallback(
     reply_text: str,
     serious_mode: bool = False,
     conversation_id: str = "",
+    is_owner: bool = False,
 ) -> str:
     is_group = conversation_id.startswith("group:")
     if is_group:
@@ -407,7 +433,11 @@ def _persona_repair_fallback(
             return "我切回正常中文：刚才那句不该乱飘。你们这话题我按当前重点接。"
         return f"“{_shorten(user_text)}”我重新说：先讲人话，别乱飘。"
 
-    direct_reply = _direct_answer_override(user_text, conversation_id=conversation_id)
+    direct_reply = _direct_answer_override(
+        user_text,
+        conversation_id=conversation_id,
+        is_owner=is_owner,
+    )
     if direct_reply:
         if is_group:
             direct_reply = _sanitize_group_mentions(direct_reply)
@@ -415,6 +445,10 @@ def _persona_repair_fallback(
 
     lore_reply = lore_direct_reply(user_text)
     if lore_reply:
+        # 与 _direct_answer_override 同一条称呼红线：群聊/非 owner 私聊
+        # 不输出 lore 原文里的「主人」。
+        if is_group or not is_owner:
+            return _cleanse_owner_address(lore_reply)
         return lore_reply
 
     if _uses_lore_imagery_out_of_context(user_text, reply_text):

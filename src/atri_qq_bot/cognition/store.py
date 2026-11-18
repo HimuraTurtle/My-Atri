@@ -4,9 +4,10 @@ import json
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import fields
 from pathlib import Path
-from typing import Any, TypeVar
+from typing import Any, Iterator, TypeVar
 
 from .contracts import (
     AffectiveState,
@@ -40,8 +41,20 @@ class CognitionStateStore:
         connection.execute("PRAGMA busy_timeout=3000")
         return connection
 
+    @contextmanager
+    def _session(self) -> Iterator[sqlite3.Connection]:
+        """提交 + 显式关闭：``with conn`` 只管事务不管关闭，泄漏的连接会让
+        WAL 无法收缩、库文件在 Windows 上无法被备份或删除（与 retrieval
+        repository 同一教训）。"""
+        connection = self._connect()
+        try:
+            with connection:
+                yield connection
+        finally:
+            connection.close()
+
     def _setup(self) -> None:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._session() as connection:
             connection.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS cognition_threads (
@@ -69,7 +82,7 @@ class CognitionStateStore:
             )
 
     def load(self, thread_id: str) -> CognitionSnapshot:
-        with self._lock, self._connect() as connection:
+        with self._lock, self._session() as connection:
             row = connection.execute(
                 "SELECT state_json FROM cognition_threads WHERE thread_id = ?",
                 (thread_id,),
@@ -85,7 +98,7 @@ class CognitionStateStore:
     def save(self, snapshot: CognitionSnapshot) -> None:
         now = snapshot.updated_at or time.time()
         payload = json.dumps(snapshot.to_dict(), ensure_ascii=False, separators=(",", ":"))
-        with self._lock, self._connect() as connection:
+        with self._lock, self._session() as connection:
             connection.execute(
                 """
                 INSERT INTO cognition_threads(thread_id, state_json, updated_at, version)
@@ -109,7 +122,7 @@ class CognitionStateStore:
         cleaned = " ".join(str(summary or "").split())[:300]
         if not cleaned:
             return
-        with self._lock, self._connect() as connection:
+        with self._lock, self._session() as connection:
             connection.execute(
                 """
                 INSERT INTO cognition_experiences(thread_id, turn_id, summary, importance, created_at)
@@ -130,7 +143,7 @@ class CognitionStateStore:
 
     def status(self) -> dict[str, Any]:
         try:
-            with self._lock, self._connect() as connection:
+            with self._lock, self._session() as connection:
                 threads = int(connection.execute("SELECT COUNT(*) FROM cognition_threads").fetchone()[0])
                 experiences = int(connection.execute("SELECT COUNT(*) FROM cognition_experiences").fetchone()[0])
                 latest = connection.execute(

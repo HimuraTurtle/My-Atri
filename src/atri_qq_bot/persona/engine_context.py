@@ -153,9 +153,11 @@ class EngineContextMixin(PersonaEngineMixin):
 
     def _needs_rewrite(self, conversation_id: str, user_text: str, reply_text: str) -> bool:
         stripped = str(reply_text or "").strip()
-        # 说话方式允许单字反应（“6”“草”“乐”）：只拦空白与纯标点，
-        # 有实义字符的短回复交给后续质量检查与复读检测。
-        if not stripped or not re.search(r"[\w\u4e00-\u9fff]", stripped):
+        # 说话方式允许单字反应（“6”“草”“乐”）和纯表情（“😂”“♡”）：
+        # 只拦空白与纯标点，有实义字符的短回复交给后续质量检查与复读检测。
+        if not stripped or not re.search(
+            r"[\w\u4e00-\u9fff\u2600-\u27bf\U0001f000-\U0001faff]", stripped
+        ):
             return True
 
         if _persona_violations(user_text, reply_text):

@@ -37,8 +37,10 @@ class OneBotMinimaxDrawMixin(OneBotServerMixin):
         if not paths:
             return
         for path in paths:
+            # send_reply 内部吞掉发送异常并以空串返回失败（image 成功时
+            # 返回占位）；失败判定看返回值，发坦诚提示而不是静默丢图。
             try:
-                await self.send_reply(
+                delivered = await self.send_reply(
                     websocket,
                     event,
                     [OutgoingMessage("image", str(path))],
@@ -48,6 +50,16 @@ class OneBotMinimaxDrawMixin(OneBotServerMixin):
             except Exception:
                 LOGGER.exception(
                     "minimax 图片投递失败：conversation=%s", conversation_id
+                )
+                await self._send_minimax_draw_text(
+                    websocket, event, "图片发送失败，请稍后再试。"
+                )
+                return
+            if not delivered:
+                LOGGER.error(
+                    "minimax 图片发送未确认：conversation=%s path=%s",
+                    conversation_id,
+                    path,
                 )
                 await self._send_minimax_draw_text(
                     websocket, event, "图片发送失败，请稍后再试。"

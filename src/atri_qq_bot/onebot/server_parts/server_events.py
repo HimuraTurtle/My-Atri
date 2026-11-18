@@ -2,6 +2,19 @@ from __future__ import annotations
 
 from .server_support import OneBotServerMixin, _sync_server_globals
 
+# send_reply 返回值里的非文本投递占位：仅作成功信号，不进入历史/记忆。
+_DELIVERY_PLACEHOLDER_KINDS = frozenset({"image", "file", "sticker", "face"})
+
+
+def _recordable_reply_text(delivered_text: str) -> str:
+    """剥掉投递占位行后返回可入档的用户可见文本。"""
+    lines = [
+        line.strip()
+        for line in str(delivered_text or "").split("\n")
+        if line.strip() and line.strip() not in _DELIVERY_PLACEHOLDER_KINDS
+    ]
+    return "\n".join(lines)
+
 
 class OneBotEventMixin(OneBotServerMixin):
     async def _handle_event(self, websocket: Any, event: dict[str, Any]) -> None:
@@ -80,6 +93,14 @@ class OneBotEventMixin(OneBotServerMixin):
             and trust_tier(profile_id) == "blocked"
         ):
             should_send_reply = False
+        if should_send_reply and not active_group_continuation and "_smart_group_reply_consumed" not in event:
+            # 冷却 check 与 mark 必须原子：mark 推迟到发送成功后的话，
+            # LLM 往返窗口（数秒）内同群其他用户的独立 worker 会并发通过
+            # check，绕过冷却连出多条回复。check 通过即占位（置于 blocked
+            # 拦截之后，被封锁用户不空耗群冷却）；回复失败也消耗冷却——
+            # 「宁可误停不刷屏」的安全方向。
+            self._mark_smart_group_reply(event, conversation_id, plain_text)
+            event["_smart_group_reply_consumed"] = True
         addressed_to_bot = (
             event.get("message_type") == "private"
             or poke_event
@@ -280,8 +301,11 @@ class OneBotEventMixin(OneBotServerMixin):
                     model_type="voice",
                     model_name=self._delivery_model_name("voice"),
                 )
+                # 点歌与论文/文档入队（_maybe_queue_*）在同轮可能并存；
+                # 歌曲发送失败也不能让已排队的交付物滞留到下一轮。
+                await self._deliver_pending_artifacts(websocket, event, conversation_id)
                 return
-            recorded_reply = delivered_text
+            recorded_reply = _recordable_reply_text(delivered_text)
             if self.cognition_shadow is not None:
                 self.cognition_shadow.record_live_outcome(
                     turn_id,
@@ -306,6 +330,10 @@ class OneBotEventMixin(OneBotServerMixin):
                 reply_focus_source=str(getattr(group_reply_focus, "source", "") or ""),
                 reply_focus_text=str(getattr(group_reply_focus, "focus_text", "") or ""),
             )
+            # 唱歌路径此前在 _maybe_queue_citation_digest/_maybe_queue_paper_search
+            # 之后提前 return，排队的交付物会滞留到该会话下一轮脱离语境补发；
+            # 与主回复路径同一条约定：本轮回合结束前投递。
+            await self._deliver_pending_artifacts(websocket, event, conversation_id)
             return
 
         if group_reply_focus is not None and group_reply_focus.source == "previous_same_sender":
@@ -503,7 +531,9 @@ class OneBotEventMixin(OneBotServerMixin):
             await self._deliver_pending_artifacts(websocket, event, conversation_id)
             return
         self._mark_smart_group_reply(event, conversation_id, plain_text)
-        recorded_reply = delivered_text
+        # 剥掉 send_reply 的投递占位行（image/file/sticker/face）：
+        # 这些是成功信号，不是亚托莉说过的话，不能进历史/记忆/认知观测。
+        recorded_reply = _recordable_reply_text(delivered_text)
         if self.cognition_shadow is not None:
             self.cognition_shadow.record_live_outcome(
                 turn_id,

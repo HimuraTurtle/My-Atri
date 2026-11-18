@@ -128,6 +128,11 @@ class OneBotAvatarMixin(OneBotServerMixin):
         if not hasattr(self, "_avatar_cooldowns"):
             self._avatar_cooldowns: dict[str, float] = {}
         self._avatar_cooldowns[conversation_id] = time.time()
+        # 会话键空间无界：超限按时间戳淘汰最旧，防止长期运行缓慢累积。
+        if len(self._avatar_cooldowns) > 1024:
+            stale = sorted(self._avatar_cooldowns, key=self._avatar_cooldowns.get)
+            for key in stale[: len(self._avatar_cooldowns) - 1024]:
+                self._avatar_cooldowns.pop(key, None)
 
         try:
             result = await asyncio.wait_for(

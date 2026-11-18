@@ -61,12 +61,16 @@ def normalize_poke_event(event: dict[str, Any], bot_qq: int) -> dict[str, Any] |
     return normalized
 
 
-def extract_reply_message_id(message: Any) -> str | None:
+def extract_reply_message_id(message: Any, _depth: int = 0) -> str | None:
     """从消息段或 NapCat 的 reply 对象中提取被引用消息 ID。"""
 
+    # 自引用/深嵌套畸形事件会让无界递归抛 RecursionError；深度封顶后
+    # 返回 None，引用链路按「无引用」处理。
+    if _depth > 8:
+        return None
     if isinstance(message, list):
         for segment in message:
-            result = extract_reply_message_id(segment)
+            result = extract_reply_message_id(segment, _depth + 1)
             if result:
                 return result
         return None
@@ -75,6 +79,8 @@ def extract_reply_message_id(message: Any) -> str | None:
 
     if str(message.get("type") or "").lower() == "reply":
         data = message.get("data") or {}
+        if not isinstance(data, dict):
+            return None
         value = data.get("id") or data.get("message_id")
         return str(value) if value not in (None, "") else None
 
@@ -83,7 +89,7 @@ def extract_reply_message_id(message: Any) -> str | None:
         if value not in (None, "") and ("message" in message or "sender" in message):
             return str(value)
     nested = message.get("message")
-    return extract_reply_message_id(nested) if nested is not None else None
+    return extract_reply_message_id(nested, _depth + 1) if nested is not None else None
 
 
 def extract_reply_inline_message(event: dict[str, Any]) -> Any | None:
@@ -114,7 +120,11 @@ def extract_plain_text(message: Any) -> str:
             continue
 
         segment_type = segment.get("type")
-        data = segment.get("data") or {}
+        # 个别实现会把 data 填成字符串/列表（畸形事件）；按空数据处理，
+        # 不能让 AttributeError 沿消息链路上溯拆掉 NapCat 连接。
+        data = segment.get("data")
+        if not isinstance(data, dict):
+            data = {}
 
         if segment_type == "text":
             parts.append(str(data.get("text", "")))

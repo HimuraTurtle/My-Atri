@@ -349,12 +349,42 @@ def _candidate(
         candidate["source_context"] = source_context
     return candidate
 
+def _scoped_memory_key(base_key: str, actor_name: Any) -> str:
+    """群主会话的归属隔离键：同一事实键按发言群友分开记账。
+
+    没有 actor（私聊/成员子会话/旧数据）保持原键，渲染与检索行为不变；
+    有 actor 时追加后缀，避免群友 B 的确认给群友 A 的候选累加证据、
+    晋升出一条归属错误的群画像。
+    """
+    actor = str(actor_name or "").strip()
+    return f"{base_key}@{actor}" if actor else base_key
+
+
+_L1_MAX_ENTRIES = 80
+
+
+def _cap_l1(memory: dict[str, Any]) -> None:
+    """L1 容量封顶；WebUI 手工/锁定条目不可被尾部裁剪静默驱逐。"""
+    entries = memory["l1"]
+    if len(entries) <= _L1_MAX_ENTRIES:
+        return
+    protected = [
+        entry
+        for entry in entries[:-_L1_MAX_ENTRIES]
+        if isinstance(entry, dict)
+        and (entry.get("locked") or entry.get("source_type") == "manual")
+    ]
+    memory["l1"] = protected + entries[-_L1_MAX_ENTRIES:]
+
+
 def _upsert_l1_candidate(
     memory: dict[str, Any],
     candidate: dict[str, Any],
     now: float,
 ) -> str | None:
-    key = f"{candidate['category']}:{candidate['key']}"
+    key = _scoped_memory_key(
+        f"{candidate['category']}:{candidate['key']}", candidate.get("actor_name")
+    )
     existing = _find_memory(memory["l1"], key)
     if existing:
         if existing.get("locked"):
@@ -413,6 +443,10 @@ def _upsert_l1_candidate(
             if meta_key in pending:
                 promoted[meta_key] = pending[meta_key]
         memory["l1"].append(promoted)
+        # 规则路径晋升同样封顶：生产默认不开模型增强，这条路径是 L1 的
+        # 主要增长源；与模型路径同一上限，防止 users.json 随运行时长单调
+        # 膨胀（手工/锁定条目除外）。
+        _cap_l1(memory)
         memory["candidates"] = [
             item for item in memory["candidates"] if item.get("memory_key") != key
         ][-20:]
@@ -466,7 +500,9 @@ def apply_extraction_operation(
     memory = _ensure_structured_memory(memory)
     bucket_name = "l1" if layer == "L1" else "l2"
     bucket = memory[bucket_name]
-    memory_key = f"{category}:{key}"
+    # 带归属的操作（群主会话模型路径）用 actor 隔离键查找，与候选路径
+    # 的去重口径一致；DELETE 也按同一口径命中，不会误删别人的条目。
+    memory_key = _scoped_memory_key(f"{category}:{key}", operation.get("actor_name"))
     existing = _find_memory(bucket, memory_key)
     if action == "DELETE":
         if existing:
@@ -527,7 +563,7 @@ def apply_extraction_operation(
         "associations": [],
         "sources": [],
     }
-    for meta_key in ("visibility", "source_context"):
+    for meta_key in ("visibility", "source_context", "actor_name"):
         if operation.get(meta_key):
             entry[meta_key] = operation[meta_key]
     _append_source(entry, operation, now)
@@ -536,7 +572,7 @@ def apply_extraction_operation(
         memory["candidates"] = [
             item for item in memory["candidates"] if item.get("memory_key") != memory_key
         ][-20:]
-        memory["l1"] = memory["l1"][-80:]
+        _cap_l1(memory)
     else:
         memory["l2"] = memory["l2"][-50:]
     return entry["id"]

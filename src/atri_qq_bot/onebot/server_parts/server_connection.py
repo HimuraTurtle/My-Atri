@@ -120,7 +120,16 @@ class OneBotConnectionMixin(OneBotServerMixin):
         health_task = asyncio.create_task(self.onebot_health_loop(websocket))
         try:
             async for raw_message in websocket:
-                await self.handle_payload(websocket, raw_message)
+                # 单条畸形事件只损失该事件本身：异常若穿透 async for 会拆掉
+                # 整条 NapCat 连接（爆炸半径从一条消息变成全部消息流）。
+                try:
+                    await self.handle_payload(websocket, raw_message)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    LOGGER.exception(
+                        "处理 OneBot 事件失败（已跳过该事件，连接保持）"
+                    )
         except Exception as exc:
             LOGGER.warning("NapCat 连接关闭或异常：%s", exc)
         finally:

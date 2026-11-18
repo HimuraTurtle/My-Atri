@@ -139,6 +139,54 @@ class OneBotServer(
     """
 
 
+BACKGROUND_LOOP_RESTART_SECONDS = 10.0
+
+
+async def _resilient_background_loop(name: str, factory: Any) -> None:
+    """后台循环的统一防death wrapper。
+
+    主动消息/定时任务循环内部曾有裸露调用（policy 加载、提示词渲染等），
+    一次异常会让 asyncio.create_task 的协程静默死亡直至重启。这里在任务
+    边界兜底：异常记完整 traceback，退避后重新调用工厂方法重启循环。
+    正常返回视为终态（功能被配置禁用时循环自己 return，重启它只会每 10
+    秒刷一条告警）。CancelledError 原样上抛，不影响关停流程。
+    """
+    while True:
+        try:
+            await factory()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            LOGGER.exception(
+                "%s 后台循环异常退出，%.1f 秒后重启",
+                name,
+                BACKGROUND_LOOP_RESTART_SECONDS,
+            )
+            await asyncio.sleep(BACKGROUND_LOOP_RESTART_SECONDS)
+        else:
+            LOGGER.info("%s 后台循环已正常退出（视为终态，不再重启）", name)
+            return
+
+
+def _spawn_background_loops(server: Any) -> list[asyncio.Task]:
+    factories = (
+        ("闲置提醒", server.idle_nudge_loop),
+        ("早安问候", server.morning_greeting_loop),
+        ("主动消息V2", server.proactive_v2_loop),
+        ("群聊主动", server.group_proactive_loop),
+        ("表情学习", server.meme_learning_loop),
+        ("漫画更新", server.manga_update_loop),
+        ("晚安问候", server.goodnight_loop),
+        ("屏幕看护", server.screen_watch_loop),
+        ("围观模式", server.watch_party_loop),
+        ("QQ空间", server.qzone_loop),
+    )
+    return [
+        asyncio.create_task(_resilient_background_loop(name, factory))
+        for name, factory in factories
+    ]
+
+
 async def run_server(config: Any) -> None:
     import websockets
 
@@ -159,51 +207,17 @@ async def run_server(config: Any) -> None:
             f"[onebot] Listening on ws://{config.host}:{config.port}/onebot "
             f"for QQ {config.bot_qq}; reply_mode={config.reply_mode}"
         )
-        idle_task = asyncio.create_task(server.idle_nudge_loop())
-        morning_task = asyncio.create_task(server.morning_greeting_loop())
-        proactive_v2_task = asyncio.create_task(server.proactive_v2_loop())
-        group_task = asyncio.create_task(server.group_proactive_loop())
-        meme_task = asyncio.create_task(server.meme_learning_loop())
-        manga_task = asyncio.create_task(server.manga_update_loop())
-        goodnight_task = asyncio.create_task(server.goodnight_loop())
-        screen_watch_task = asyncio.create_task(server.screen_watch_loop())
-        watch_party_task = asyncio.create_task(server.watch_party_loop())
-        qzone_task = asyncio.create_task(server.qzone_loop())
+        background_tasks = _spawn_background_loops(server)
         webui_server = await start_webui(config, server)
         try:
             await asyncio.Future()
         finally:
             await stop_webui(webui_server)
-            idle_task.cancel()
-            morning_task.cancel()
-            proactive_v2_task.cancel()
-            group_task.cancel()
-            meme_task.cancel()
-            manga_task.cancel()
-            goodnight_task.cancel()
-            screen_watch_task.cancel()
-            watch_party_task.cancel()
-            qzone_task.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
-                await idle_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await morning_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await proactive_v2_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await group_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await meme_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await manga_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await goodnight_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await screen_watch_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await watch_party_task
-            with contextlib.suppress(asyncio.CancelledError):
-                await qzone_task
+            for task in background_tasks:
+                task.cancel()
+            for task in background_tasks:
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await server.shutdown()
             if getattr(server, "_manga_service", None) is not None:
                 with contextlib.suppress(Exception):

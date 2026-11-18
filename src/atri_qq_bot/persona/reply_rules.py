@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..text_units import count_questions
 from . import core as _core
 
 
@@ -636,7 +637,9 @@ def _needs_comfort_repair_mode(text: str, iteration_decision: Any | None = None)
 
 
 def _question_count(text: str) -> int:
-    return text.count("?") + text.count("？")
+    # 强调式「？？？」是一个问题，不是三个；URL 查询串里的 `?` 不是问号。
+    # 与 _trim_extra_questions 共用同一套 URL 感知计数，避免两处口径漂移。
+    return count_questions(text)
 
 
 def _asks_for_direct_suggestion(text: str) -> bool:
@@ -789,12 +792,18 @@ def _anger_repair_reply(user_text: str, is_group: bool = False) -> str:
     return "我先收住，不跟你顶嘴。刚才没接好就是没接好；你现在生气我看到了，后面我先正常、短句、直接答。"
 
 
+def _cleanse_owner_address(text: str) -> str:
+    """把兜底文案里的「主人」改写成「你」，供非 owner 可触达路径使用。"""
+    return text.replace("主人", "你").replace("我的你", "你")
+
+
 def _direct_answer_override(
     user_text: str,
     iteration_decision: Any | None = None,
     conversation_id: str = "",
     allow_abstract: bool = False,
     serious_mode: bool = False,
+    is_owner: bool = False,
 ) -> str | None:
     is_group = conversation_id.startswith("group:")
     intent_text = _intent_text(user_text)
@@ -887,8 +896,10 @@ def _direct_answer_override(
 
     lore_reply = lore_direct_reply(intent_text)
     if lore_reply:
-        if is_group:
-            return lore_reply.replace("主人", "你")
+        # 「主人」是 owner 专属称呼：群聊一律改写，私聊仅 owner 保留原样，
+        # 非 owner 私聊用户可达此路径，不能收到带「主人」的 lore 原文。
+        if is_group or not is_owner:
+            return _cleanse_owner_address(lore_reply)
         return lore_reply
 
     return None

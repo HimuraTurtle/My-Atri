@@ -50,6 +50,9 @@ class MemoryExtractionRequest:
     visibility: str = "private"
     source_context: str | None = None
     scope_kind: str = "person"
+    # 群主会话的发言群友昵称：模型增强路径的 ADD 结果同样要带归属，
+    # 否则渲染时会被降级成「某位群友」，个人事实还会混进群画像。
+    actor_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -216,13 +219,16 @@ class MemoryExtractionWorker:
     def status(self) -> dict[str, Any]:
         """返回轻量运行状态，供日志/调试面板查看，不触发模型加载。"""
         thread = self._thread
+        # _last_model_at 由 worker 线程并发写入；max() 直接迭代正在变更的
+        # dict 会偶发 RuntimeError。list() 快照在 GIL 下原子完成。
+        last_model_values = list(self._last_model_at.values())
         return {
             "enabled": self.enabled,
             "llm_enabled": self.llm_enabled,
             "model": self.model,
             "queued": self._queue.qsize(),
             "running": bool(thread and thread.is_alive()),
-            "last_model_at": max(self._last_model_at.values(), default=0.0),
+            "last_model_at": max(last_model_values, default=0.0),
             "model_disabled_until": self._model_disabled_until,
             "model_failure_count": self._model_failure_count,
             "model_last_error": self._model_last_error,
@@ -418,29 +424,38 @@ def _normalise_model_operations(content: Any, request: MemoryExtractionRequest) 
             continue
         key = _clean_value(raw.get("key"))[:80]
         value = _clean_value(raw.get("value"))[:120]
+        # 群主会话 scope 过滤与规则路径（deterministic add）对齐：个人事实
+        # 不进群总览；偏好/习惯降级为群体兴趣。漏掉这层时，群友在群里说的
+        # 「我叫 XX」会以无归属条目混进群画像。
+        if request.scope_kind == "group" and category == "profile_fact":
+            continue
+        if request.scope_kind == "group" and category in {"preference", "habit"}:
+            category = "interest"
+            key = f"群体{_clean_value(key)}"
         if not key or (operation != "DELETE" and not value) or _unsafe_value(value):
             continue
         try:
             confidence = max(0.0, min(1.0, float(raw.get("confidence", 0.6))))
         except (TypeError, ValueError):
             confidence = 0.6
-        result.append(
-            {
-                "operation": operation,
-                "layer": layer,
-                "category": category,
-                "key": key,
-                "value": value,
-                "confidence": confidence,
-                "source_type": "model",
-                "evidence": _clean_value(raw.get("evidence") or request.text)[:180],
-                "visibility": request.visibility,
-                "source_context": request.source_context,
-                "created_at": request.now,
-                "updated_at": request.now,
-                "promote": confidence >= 0.78,
-            }
-        )
+        normalised = {
+            "operation": operation,
+            "layer": layer,
+            "category": category,
+            "key": key,
+            "value": value,
+            "confidence": confidence,
+            "source_type": "model",
+            "evidence": _clean_value(raw.get("evidence") or request.text)[:180],
+            "visibility": request.visibility,
+            "source_context": request.source_context,
+            "created_at": request.now,
+            "updated_at": request.now,
+            "promote": confidence >= 0.78,
+        }
+        if request.scope_kind == "group" and request.actor_name:
+            normalised["actor_name"] = str(request.actor_name)[:40]
+        result.append(normalised)
     return result
 
 

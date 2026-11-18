@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import re
 
+from ..text_units import _protected_indices, split_sentences
+
 
 def split_reply_text(text: str, max_chars: int = 44, max_parts: int = 4) -> list[str]:
     text = _compact_reply_text(text)
@@ -46,28 +48,42 @@ def _compact_reply_text(text: str) -> str:
 
 
 def _sentence_chunks(text: str) -> list[str]:
-    chunks = re.findall(r"[^。！？!?；;\n]+[。！？!?；;]?", text)
-    cleaned = [chunk.strip() for chunk in chunks if chunk.strip()]
-    return cleaned or [text]
+    # URL 内的 `?` 等标点不构成句界，共享实现见 text_units。拆条是传输层，
+    # 输入是模型的既成输出：切不出任何句子时原样返回，绝不吞内容。
+    return split_sentences(text) or [text]
 
 
 def _hard_wrap(text: str, max_chars: int) -> list[str]:
     if len(text) <= max_chars:
         return [text]
 
+    protected = _protected_indices(text)
     parts: list[str] = []
-    remaining = text
-    soft_marks = "，,、 "
-    while len(remaining) > max_chars:
-        split_at = max(remaining.rfind(mark, 0, max_chars + 1) for mark in soft_marks)
-        if split_at < max_chars // 2:
-            split_at = max_chars
-        part = remaining[: split_at + 1].strip()
-        remaining = remaining[split_at + 1 :].strip()
+    start = 0
+    length = len(text)
+    while length - start > max_chars:
+        # 软标点窗口 [start, start+max_chars)：切点含软标点时恰好切出
+        # max_chars 个字符，杜绝旧实现 max_chars+1 的越界。
+        cut = -1
+        for index in range(start + max_chars - 1, start - 1, -1):
+            if index in protected:
+                continue
+            if text[index] in "，,、 ":
+                cut = index + 1
+                break
+        if cut < 0 or cut - start < max_chars // 2:
+            cut = start + max_chars
+            # 硬切不能落在 URL 内部：宁可这一条超出字数预算，也要保住
+            # 完整链接——链接被拦腰截断后用户拿到的是打不开的碎片。
+            while cut < length and cut in protected:
+                cut += 1
+        part = text[start:cut].strip()
         if part:
             parts.append(part)
-    if remaining:
-        parts.append(remaining)
+        start = cut
+    tail = text[start:].strip()
+    if tail:
+        parts.append(tail)
     return parts
 
 
@@ -80,4 +96,3 @@ def _truncate_tail(text: str, limit: int) -> str:
     return text
 
 # End of module.
-

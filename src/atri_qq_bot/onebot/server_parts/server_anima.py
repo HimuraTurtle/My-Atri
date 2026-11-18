@@ -45,8 +45,10 @@ class OneBotAnimaMixin(OneBotServerMixin):
         if not paths:
             return
         for path in paths:
+            # send_reply 内部吞掉发送异常并以空串返回失败（image 成功时
+            # 返回占位），因此失败判定看返回值；这里发坦诚提示，绝不静默丢图。
             try:
-                await self.send_reply(
+                delivered = await self.send_reply(
                     websocket,
                     event,
                     [OutgoingMessage("image", path)],
@@ -58,6 +60,16 @@ class OneBotAnimaMixin(OneBotServerMixin):
                     "anima 图片投递失败：conversation=%s", conversation_id
                 )
                 await self._send_anima_text(websocket, event, f"图片发送失败：{exc}")
+                return
+            if not delivered:
+                LOGGER.error(
+                    "anima 图片发送未确认：conversation=%s path=%s",
+                    conversation_id,
+                    path,
+                )
+                await self._send_anima_text(
+                    websocket, event, "图片发送失败，请稍后再试。"
+                )
                 return
             await asyncio.sleep(_ANIMA_IMAGE_SEND_GAP_SECONDS)
 

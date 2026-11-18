@@ -491,6 +491,8 @@ def test_onebot_delivers_pending_minimax_images(monkeypatch, tmp_path: Path) -> 
 
     async def _fake_send_reply(websocket, event, messages, model_type, model_name):
         sent.append({"messages": messages, "model_type": model_type})
+        # send_reply 契约：image 成功时返回占位（truthy），空串代表发送失败。
+        return "image"
 
     server = OneBotServer.__new__(OneBotServer)
     server.config = config
@@ -514,6 +516,7 @@ def test_onebot_no_pending_is_noop(monkeypatch) -> None:
 
     async def _fake_send_reply(websocket, event, messages, model_type, model_name):
         sent.append(messages)
+        return "image"
 
     server.send_reply = _fake_send_reply
     server._delivery_model_name = lambda model_type: "test-model"

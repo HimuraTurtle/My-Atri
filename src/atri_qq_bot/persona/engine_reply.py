@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import asyncio
+
 from .engine_support import PersonaEngineMixin
 
 
@@ -36,9 +38,18 @@ class EngineReplyMixin(PersonaEngineMixin):
             return command_reply
 
         if not observed:
-            self.memory.observe_user(profile_id, clean_text, nickname=nickname, is_owner=is_owner)
+            # 记忆写入是同步文件 I/O（全量 users.json 落盘），放线程池执行，
+            # 不阻塞事件循环上的其他会话与心跳。
+            await asyncio.to_thread(
+                self.memory.observe_user,
+                profile_id,
+                clean_text,
+                nickname=nickname,
+                is_owner=is_owner,
+            )
             if profile_id != conversation_id:
-                self.memory.observe_user(
+                await asyncio.to_thread(
+                    self.memory.observe_user,
                     conversation_id,
                     clean_text,
                     nickname=nickname,
@@ -313,6 +324,7 @@ class EngineReplyMixin(PersonaEngineMixin):
                             api_reply,
                             serious_mode=self._serious_mode_active(conversation_id),
                             conversation_id=conversation_id,
+                            is_owner=is_owner,
                         )
                         repaired_reply = _repair_incomplete_reply(fallback_reply)
                     if repaired_reply:

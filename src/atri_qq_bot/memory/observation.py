@@ -6,6 +6,10 @@ from .support import MemoryMixin
 
 
 class MemoryObservationMixin(MemoryMixin):
+    # observe_user 与 observe_bot 一样持锁：私聊主链路（reply/observe_incoming）
+    # 与后台提取/回填线程会并发读写同一棵 self._data，漏锁的一方会在
+    # json.dump 迭代期间与另一方竞争，炸出未被捕获的 RuntimeError。
+    @_locked_mutation
     def observe_user(
         self,
         conversation_id: str,
@@ -96,6 +100,7 @@ class MemoryObservationMixin(MemoryMixin):
             visibility=visibility,
             source_context=source_context,
             scope_kind="group" if _is_group_conversation(conversation_id) and ":user:" not in conversation_id else "person",
+            actor_name=actor_name,
         )
         if not _is_group_conversation(conversation_id):
             _remember_personal_event(item, text, now)
@@ -179,7 +184,9 @@ class MemoryObservationMixin(MemoryMixin):
         for conversation_id, entry in gap_backfill.build_gap_summaries(
             group_id, rows, last_at, now
         ):
-            item = conversations.get(conversation_id)
+            # 静默期间新入群/首次发言的群友还没有成员子会话；_conversation
+            # 会按需创建，他们的断线话题摘要不再被静默丢弃。
+            item = self._conversation(conversation_id, save=False)
             if not isinstance(item, dict):
                 continue
             memory = _ensure_structured_memory(item)
@@ -364,6 +371,9 @@ class MemoryObservationMixin(MemoryMixin):
         )
         self._save()
 
+    # 读路径与写线程共用 self._data（_reload_if_changed 会整体换树、decay 会改条目），
+    # to_thread 化后与持锁写者并发，同样需要进程锁串行化。
+    @_locked_mutation
     def recent_history(self, conversation_id: str, limit: int = 10) -> list[dict[str, Any]]:
         item = self._conversation(conversation_id, save=False)
         history = item.get("history")
@@ -371,6 +381,8 @@ class MemoryObservationMixin(MemoryMixin):
             return []
         return [entry for entry in history[-max(0, limit) :] if isinstance(entry, dict)]
 
+    # 账本写入与 observe 同一棵 _data，同样需要与后台线程互斥。
+    @_locked_mutation
     def record_completed_action(
         self,
         conversation_id: str,
@@ -428,6 +440,8 @@ class MemoryObservationMixin(MemoryMixin):
                 break
         return entries
 
+    # 同上：profile 的 decay/_save 副作用在无锁状态会与写者竞争。
+    @_locked_mutation
     def profile(self, conversation_id: str, now: float | None = None) -> dict[str, Any]:
         now = now or time.time()
         item = self._profile_item(conversation_id)
@@ -583,6 +597,9 @@ class MemoryObservationMixin(MemoryMixin):
         )
         return merged
 
+    # recall_context 经 asyncio.to_thread 在线程池执行；内部 profile/reload
+    # 与持锁写者并发会静默丢失记忆更新，必须持锁。
+    @_locked_mutation
     def recall_context(
         self,
         conversation_id: str,

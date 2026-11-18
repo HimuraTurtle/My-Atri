@@ -32,11 +32,11 @@ ATRI 现有链路（人格/记忆/工具/论文/QQ空间/主动消息）—— �
 
    ```env
    MILKY_ENABLED=true
-   MILKY_BASE_URL=http://127.0.0.1:8081
+   MILKY_BASE_URL=http://127.0.0.1:3000
    MILKY_ACCESS_TOKEN=你的随机令牌
    ```
 
-   - `MILKY_BASE_URL`：Lagrange.Milky 的 HTTP 地址（默认 `http://127.0.0.1:8081`）；
+   - `MILKY_BASE_URL`：Lagrange.Milky 的 HTTP 地址（默认 `http://127.0.0.1:3000`）；
    - `MILKY_ACCESS_TOKEN`：与 Lagrange.Milky 配置一致；仅本机可留空。
 
 3. **照常启动 ATRI**（`MILKY_ENABLED=true` 会自动切到 Milky 模式，不再监听 8765 反向 WS）。
