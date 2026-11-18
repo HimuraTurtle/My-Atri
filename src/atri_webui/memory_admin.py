@@ -13,6 +13,7 @@ from urllib.parse import parse_qs
 
 from atri_qq_bot.runtime.paths import MEMORY_BACKUP_DIR, MEMORY_PATH
 from atri_qq_bot.retrieval import SemanticMemoryRepository
+from atri_qq_bot.memory.extraction_rules import _scoped_memory_key
 
 
 class MemoryAdmin:
@@ -859,7 +860,10 @@ def normalize_manual_memory_content(conversation_id: str, content: dict[str, Any
             entry["category"] = category
             entry["key"] = key
             entry["value"] = value
-            memory_key = f"{category}:{key}"
+            # 群主会话条目带 @actor 隔离后缀：重建键时必须保留，否则一次
+            # WebUI 编辑就把按人隔离的条目并回共享键，后续发言会另立平行
+            # 候选、证据永不累积到这条手工锁定条目上。
+            memory_key = _scoped_memory_key(f"{category}:{key}", entry.get("actor_name"))
             entry["memory_key"] = memory_key
             entry["id"] = str(entry.get("id") or memory_id(layer, memory_key))
             entry["source"] = "webui"

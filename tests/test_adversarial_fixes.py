@@ -225,6 +225,28 @@ def test_rule_path_l1_promotion_is_capped() -> None:
     assert len(memory["l1"]) == 80
 
 
+def test_l1_cap_keeps_locked_entries() -> None:
+    from atri_qq_bot.memory.extraction_rules import _cap_l1
+
+    memory = _structured()
+    # 最旧的一条是 WebUI 手工锁定条目：封顶裁剪不允许静默驱逐它。
+    memory["l1"].append({"memory_key": "preference:手工", "locked": True, "value": "人工确认"})
+    for index in range(85):
+        _upsert_l1_candidate(memory, _candidate(f"偏好{index}", "群友A"), 1000.0 + index)
+        _upsert_l1_candidate(memory, _candidate(f"偏好{index}", "群友A"), 2000.0 + index)
+    keys = [e.get("memory_key") for e in memory["l1"]]
+    assert "preference:手工" in keys
+
+
+def test_recordable_reply_text_strips_delivery_placeholders() -> None:
+    from atri_qq_bot.onebot.server_parts.server_events import _recordable_reply_text
+
+    delivered = "好的，我看看。\nimage"
+    assert _recordable_reply_text(delivered) == "好的，我看看。"
+    assert _recordable_reply_text("image") == ""
+    assert _recordable_reply_text("sticker\nfile") == ""
+
+
 def test_model_operations_group_scope_filters_and_stamps_actor() -> None:
     request = MemoryExtractionRequest(
         conversation_id="group:7",
