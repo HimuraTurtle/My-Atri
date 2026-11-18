@@ -17,7 +17,11 @@ from ..application.automatic_tool_runner import AutomaticToolRunner
 from ..cognition.prompt_context import render_cognition_context
 from ..cognition.store import CognitionStateStore
 from ..iteration import judge_correction, iteration_prompt_hint
-from ..language_guard import has_illegal_language_or_garbage
+from ..language_guard import (
+    detect_ai_flavor,
+    extract_phrase_fingerprints,
+    has_illegal_language_or_garbage,
+)
 from ..llm_tools import (
     AUTOMATIC_TOOL_INSTRUCTION_PROMPT,
     FINAL_ANSWER_TOOL_NAME,
@@ -56,6 +60,9 @@ LOGGER = logging.getLogger("atri.persona")
 REWRITE_PROMPT = load_prompt("rewrite")
 LANGUAGE_GUARD_PROMPT = load_prompt("language_guard")
 LANGUAGE_RETRY_PROMPT = load_prompt("language_retry")
+# AI 味（固定句式/口头禅/骑墙话/跨轮复读）是软违规：
+# 触发质量重试，但重试耗尽后仍返回语言合格的回复，不像外语乱码那样硬失败。
+AI_FLAVOR_RETRY_PROMPT = load_prompt("ai_flavor_retry")
 COMFORT_REPAIR_PROMPT = load_prompt("comfort_repair")
 
 

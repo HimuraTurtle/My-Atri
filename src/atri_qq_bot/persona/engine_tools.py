@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 
 from .engine_support import PersonaEngineMixin
@@ -233,7 +234,13 @@ class EngineToolsMixin(PersonaEngineMixin):
         if not repair_mode and not visual_turn:
             # 记忆是增强项，必须排在本轮实际消息之后；否则旧的画像/事件
             # 会在模型注意力上压过刚刚发生的对话。
-            memory_context = self.memory.recall_context(profile_id or conversation_id, user_text)
+            # 检索链路含 SQLite 同步读写与（可选）Ollama embedding 同步 HTTP，
+            # 放线程池执行，避免拖住事件循环上的其他会话与心跳。
+            memory_context = await asyncio.to_thread(
+                self.memory.recall_context,
+                profile_id or conversation_id,
+                user_text,
+            )
         if context_profile and not visual_turn:
             topics = (
                 ""
@@ -251,7 +258,11 @@ class EngineToolsMixin(PersonaEngineMixin):
                 }
             )
             if not repair_mode:
-                group_memory_context = self.memory.recall_context(conversation_id, user_text)
+                group_memory_context = await asyncio.to_thread(
+                    self.memory.recall_context,
+                    conversation_id,
+                    user_text,
+                )
                 if group_memory_context:
                     messages.append(
                         {
@@ -1396,6 +1407,49 @@ class EngineToolsMixin(PersonaEngineMixin):
             response.raise_for_status()
         return response.json()
 
+    # ---- 跨轮句式账本：阻止固定开头/收尾在会话内复读 ----
+
+    def _banned_phrases_hint(self, conversation_id: str) -> str | None:
+        """把近期用过的开头/收尾注入本轮禁用清单，预防复读。"""
+        ledger = self._phrase_ledger.get(conversation_id)
+        if not ledger:
+            return None
+        heads: list[str] = []
+        tails: list[str] = []
+        for head, tail in ledger:
+            if head not in heads:
+                heads.append(head)
+            if tail not in tails:
+                tails.append(tail)
+        head_text = "、".join(f"「{h}」" for h in heads[:8])
+        tail_text = "、".join(f"「{t}」" for t in tails[:8])
+        parts = []
+        if head_text:
+            parts.append(f"开头：{head_text}")
+        if tail_text:
+            parts.append(f"收尾：{tail_text}")
+        if not parts:
+            return None
+        return f"以下是你最近已经用过的表达，本轮全部禁用，换新的说法：{'；'.join(parts)}"
+
+    def _ledger_offense(self, conversation_id: str, reply: str) -> str | None:
+        """新回复的开头/收尾与近期账本撞车时，返回违规描述。"""
+        ledger = self._phrase_ledger.get(conversation_id)
+        if not ledger:
+            return None
+        used_heads = {head for head, _ in ledger}
+        used_tails = {tail for _, tail in ledger}
+        for head, tail in extract_phrase_fingerprints(reply):
+            if head in used_heads:
+                return f"开头「{head}」最近已经用过"
+            if tail in used_tails:
+                return f"收尾「{tail}」最近已经用过"
+        return None
+
+    def _record_phrase_ledger(self, conversation_id: str, reply: str) -> None:
+        for fingerprint in extract_phrase_fingerprints(reply):
+            self._phrase_ledger[conversation_id].append(fingerprint)
+
     async def _reply_with_guarded_api(
         self,
         conversation_id: str,
@@ -1410,6 +1464,14 @@ class EngineToolsMixin(PersonaEngineMixin):
         reply_focus: GroupReplyFocus | None = None,
     ) -> str:
         last_reply = ""
+        # AI 味是软违规：重试耗尽后返回最后一条语言合格的回复，而不是硬失败。
+        last_clean_reply = ""
+        flavor_offense = ""
+        banned_hint = self._banned_phrases_hint(conversation_id)
+        if banned_hint:
+            extra_system = (
+                f"{extra_system}\n\n{banned_hint}" if extra_system else banned_hint
+            )
         visual_temperature = (
             min(0.25, float(getattr(self.config, "temperature", 0.6)))
             if _has_current_visual_context(tool_context)
@@ -1425,7 +1487,15 @@ class EngineToolsMixin(PersonaEngineMixin):
         for attempt, temperature in enumerate(retry_temperatures):
             retry_system = extra_system
             if attempt:
-                parts = [extra_system, LANGUAGE_RETRY_PROMPT]
+                parts = [extra_system]
+                if last_reply and has_illegal_language_or_garbage(last_reply):
+                    # 硬违规：外语/乱码，沿用语言重试规则。
+                    parts.append(LANGUAGE_RETRY_PROMPT)
+                else:
+                    # 软违规：固定句式/口头禅/骑墙话/跨轮复读。
+                    parts.append(AI_FLAVOR_RETRY_PROMPT)
+                    if flavor_offense:
+                        parts.append(f"违规表达：{flavor_offense}")
                 if last_reply:
                     parts.append(f"不合格回复：{_shorten(last_reply, 160)}")
                 retry_system = "\n\n".join(part for part in parts if part)
@@ -1453,8 +1523,20 @@ class EngineToolsMixin(PersonaEngineMixin):
                 proactive_evidence=proactive_evidence,
             )
             last_reply = reply
-            if reply and not has_illegal_language_or_garbage(reply):
+            if not reply or has_illegal_language_or_garbage(reply):
+                continue
+            offense = detect_ai_flavor(reply) or self._ledger_offense(
+                conversation_id, reply
+            )
+            if not offense:
+                self._record_phrase_ledger(conversation_id, reply)
                 return reply
+            flavor_offense = offense
+            last_clean_reply = reply
+        if last_clean_reply:
+            # AI 味重试耗尽：宁可带一点复读感也要把话说出来，不像乱码那样放弃。
+            self._record_phrase_ledger(conversation_id, last_clean_reply)
+            return last_clean_reply
         raise RuntimeError("模型连续 3 次返回空内容、乱码或异常语言")
 
 

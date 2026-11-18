@@ -13,6 +13,12 @@ class EngineStateMixin(PersonaEngineMixin):
         self._history: defaultdict[str, deque[dict[str, str]]] = defaultdict(
             lambda: deque(maxlen=16)
         )
+        # 跨轮句式账本：conversation_id -> 近期每行 (开头, 收尾) 指纹。
+        # 用于阻止“高性能的嘛”式收尾、固定开头在会话内跨轮复读；
+        # 指纹由 language_guard.ai_flavor.extract_phrase_fingerprints 生成。
+        self._phrase_ledger: defaultdict[str, deque[tuple[str, str]]] = defaultdict(
+            lambda: deque(maxlen=16)
+        )
         self._recent_replies: defaultdict[str, deque[str]] = defaultdict(
             lambda: deque(maxlen=6)
         )

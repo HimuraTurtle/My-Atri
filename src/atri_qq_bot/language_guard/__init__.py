@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from .ai_flavor import AI_FLAVOR_RULES, FENCE_SITTING_RE, detect_ai_flavor, extract_phrase_fingerprints
 from .detector import (
     _has_ascii_garbage_without_chinese,
     _has_symbol_garbage,
@@ -19,15 +20,19 @@ from .patterns import (
 )
 
 __all__ = [
+    "AI_FLAVOR_RULES",
     "ASCII_SYMBOL_RE",
     "ASCII_TOKEN_RE",
     "BOX_OR_TECH_SYMBOL_RE",
     "COMBINING_GARBAGE_RE",
+    "FENCE_SITTING_RE",
     "ILLEGAL_SCRIPT_RE",
     "LATIN_EXTENDED_RE",
     "PAD_TOKEN_RE",
     "SYMBOL_GARBAGE_RE",
     "VIETNAMESE_MARK_RE",
+    "detect_ai_flavor",
+    "extract_phrase_fingerprints",
     "has_illegal_language_or_garbage",
     "_has_ascii_garbage_without_chinese",
     "_has_symbol_garbage",
