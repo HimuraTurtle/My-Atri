@@ -475,16 +475,16 @@ class MemoryObservationMixin(MemoryMixin):
 
         if avg_chars <= 12:
             target_chars = 36
-            preferred_parts = 1
-            length_style = "用户常发短句，回复要更短、更像即时聊天。"
+            preferred_parts = 2
+            length_style = "用户常发短句，回复要更短、更碎，像即时聊天一样连发几条。"
         elif avg_chars <= 45:
             target_chars = 64
-            preferred_parts = 2
-            length_style = "用户消息长度中等，回复 1 到 2 条短句，别写成长段。"
+            preferred_parts = 3
+            length_style = "用户消息长度中等，回复拆成两三条短句连发，别写成长段。"
         else:
             target_chars = 92
-            preferred_parts = 3
-            length_style = "用户愿意讲细节，回复可以多接一点具体内容，但仍要分短句。"
+            preferred_parts = 4
+            length_style = "用户愿意讲细节，回复可以多接一点具体内容，但每条都要短，连着发。"
 
         if avg_gap is not None and avg_gap <= 45:
             pace_style = "用户互动节奏较快，优先短平快，不要连续追问。"

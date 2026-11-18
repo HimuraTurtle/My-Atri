@@ -37,7 +37,9 @@ class BotConfig:
     chat_resource_wait_seconds: float = 35.0
     chat_quality_retries: int = 1
     message_split_max_chars: int = 44
-    message_split_max_parts: int = 4
+    # 拆条封顶给足 6 条：模型按说话方式规范常态发 2~4 条短句、情绪上来连发
+    # 五六条，封顶太低会把碎片消息缝合回长段，失去「真人连发」的节奏感。
+    message_split_max_parts: int = 6
     message_send_delay_min: float = 0.55
     message_send_delay_max: float = 1.35
     sticker_dir: Path = field(default_factory=lambda: _project_root() / "data" / "stickers")

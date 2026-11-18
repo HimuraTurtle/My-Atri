@@ -93,7 +93,7 @@ def load_config(env_file: str | Path | None = None) -> BotConfig:
             0, min(2, _env_int("CHAT_QUALITY_RETRIES", 1))
         ),
         message_split_max_chars=_env_int("MESSAGE_SPLIT_MAX_CHARS", 44),
-        message_split_max_parts=_env_int("MESSAGE_SPLIT_MAX_PARTS", 4),
+        message_split_max_parts=_env_int("MESSAGE_SPLIT_MAX_PARTS", 6),
         message_send_delay_min=_env_float("MESSAGE_SEND_DELAY_MIN", 0.55),
         message_send_delay_max=_env_float("MESSAGE_SEND_DELAY_MAX", 1.35),
         sticker_dir=_env_path("STICKER_DIR", root / "data" / "stickers", root),

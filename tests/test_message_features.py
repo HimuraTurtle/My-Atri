@@ -72,6 +72,16 @@ def test_split_reply_text_caps_multi_line_replies_without_truncation() -> None:
     assert parts[0] == "一" and parts[1] == "二" and parts[2] == "三四五"
 
 
+def test_split_reply_text_keeps_six_fragment_lines_unmerged() -> None:
+    # 说话方式规范允许情绪上来连发五六条碎片；默认封顶 6 条时
+    # 这些短行必须逐条送达，不得被缝合回长段。
+    text = "诶\n等等\n你说真的？\n那我去翻翻\n不对\n先等我查完嘛"
+
+    parts = split_reply_text(text, max_chars=44, max_parts=6)
+
+    assert parts == ["诶", "等等", "你说真的？", "那我去翻翻", "不对", "先等我查完嘛"]
+
+
 def test_empty_reply_plan_stays_silent_without_template() -> None:
     manager = StickerManager(Path("data/stickers"), Path("data/stickers/triggers.json"))
     config = SimpleNamespace(
@@ -701,7 +711,7 @@ def test_memory_profile_adapts_to_short_chat_style(tmp_path) -> None:
 
     profile = store.profile("private:1")
 
-    assert profile["preferred_parts"] == 1
+    assert profile["preferred_parts"] == 2
     assert profile["target_reply_chars"] <= 40
 
 

@@ -29,7 +29,7 @@ def test_speech_style_prompt_loads_and_declares_priority_over_persona() -> None:
     assert SPEECH_STYLE_PROMPT is not PERSONA_PROMPT
     # 关键锚点：分条机制与双轨优先级声明缺失时说话方式层等于没接上。
     assert "每行一条" in SPEECH_STYLE_PROMPT
-    assert "1~20 字" in SPEECH_STYLE_PROMPT
+    assert "1~12 字" in SPEECH_STYLE_PROMPT
     # 开口形态归本节，性格与价值冲突归人格核心（文本蒸馏）。
     assert "以人格核心为准" in SPEECH_STYLE_PROMPT
     # 直率红线不被圆滑规则覆盖：她天然直球，不当老好人。
