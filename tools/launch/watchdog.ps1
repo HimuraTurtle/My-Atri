@@ -45,6 +45,13 @@ function Write-GuardLog($message) {
 }
 
 if ($args -contains "-Stop") {
+    # 先结束计划任务实例（若任务正处于 Running，实例进程由任务调度器持有）
+    $task = Get-ScheduledTask -TaskName "ATRI Watchdog" -ErrorAction SilentlyContinue
+    if ($task -and $task.State -eq "Running") {
+        Stop-ScheduledTask -TaskName "ATRI Watchdog" -ErrorAction SilentlyContinue
+        Start-Sleep -Seconds 1
+    }
+
     $guards = Get-CimInstance Win32_Process -Filter "Name='powershell.exe'" |
         Where-Object { $_.CommandLine -match 'watchdog\.ps1' -and $_.CommandLine -notmatch '-Stop' }
     foreach ($g in $guards) {
@@ -53,16 +60,28 @@ if ($args -contains "-Stop") {
     }
     if (-not $guards) { Write-Output "guard not running" }
 
-    $conn = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
-    if ($conn) {
-        $proc = Get-Process -Id $conn[0].OwningProcess -ErrorAction SilentlyContinue
-        if ($proc) {
-            Stop-Process -Id $proc.Id -Force
-            Write-Output "atri stopped: $($proc.Id) $($proc.ProcessName)"
-        }
-    } else {
-        Write-Output "atri not running"
+    # 按命令行匹配杀 ATRI（启动早期还没绑定 8765 时端口判据会漏）；端口
+    # owner 兜底处理非 pythonw 形态的监听进程。
+    $atriProcs = Get-CimInstance Win32_Process -Filter "Name='pythonw.exe'" |
+        Where-Object { $_.CommandLine -match 'atri_qq_bot' }
+    $stoppedAtri = $false
+    foreach ($p in $atriProcs) {
+        Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+        Write-Output "atri stopped: $($p.ProcessId)"
+        $stoppedAtri = $true
     }
+    if (-not $stoppedAtri) {
+        $conn = Get-NetTCPConnection -LocalPort 8765 -State Listen -ErrorAction SilentlyContinue
+        if ($conn) {
+            $proc = Get-Process -Id $conn[0].OwningProcess -ErrorAction SilentlyContinue
+            if ($proc) {
+                Stop-Process -Id $proc.Id -Force
+                Write-Output "atri stopped: $($proc.Id) $($proc.ProcessName)"
+                $stoppedAtri = $true
+            }
+        }
+    }
+    if (-not $stoppedAtri) { Write-Output "atri not running" }
     exit 0
 }
 
@@ -85,9 +104,11 @@ public static extern System.IntPtr CreateMutexW(System.IntPtr lpMutexAttributes,
     # 可以顺带监护 NapCat；Start-Process -Wait 会阻塞到 ATRI 退出，根本
     # 没有机会做第二件事。
     $crashStreak = 0
+    $backoutCount = 0
     $ownedByGuard = $false
     $ownedSince = Get-Date
     $napcatRetryAt = Get-Date   # 首次立即检查
+    Write-GuardLog "guard: started (pid=$PID)."
     while ($true) {
         if (-not (Test-AtriAlive)) {
             # 只对守卫自己拉起的实例统计崩溃连击；用户手动的实例死了
@@ -97,9 +118,20 @@ public static extern System.IntPtr CreateMutexW(System.IntPtr lpMutexAttributes,
                 if ($uptime.TotalSeconds -lt 60) { $crashStreak++ } else { $crashStreak = 0 }
             }
             if ($crashStreak -ge 3) {
-                Write-GuardLog "guard: crash streak=$crashStreak, backing off 5 minutes."
+                # 退避升级：5min -> 15min -> 60min 封顶。崩溃连击多半是配置
+                # 或环境问题，固定 5 分钟只会无限打转；带上 crash.log 末行
+                # 方便事后定位。
+                $backoutCount++
+                $minutes = @(5, 15, 60)[[Math]::Min($backoutCount - 1, 2)]
+                $crashHint = ""
+                $crashLog = Join-Path $root "logs\crash.log"
+                if (Test-Path -LiteralPath $crashLog) {
+                    $lastLine = Get-Content -LiteralPath $crashLog -Tail 1 -ErrorAction SilentlyContinue
+                    if ($lastLine) { $crashHint = " last-crash: " + $lastLine.Substring(0, [Math]::Min(200, $lastLine.Length)) }
+                }
+                Write-GuardLog "guard: crash streak=$crashStreak, backing off $minutes minutes.$crashHint"
                 $crashStreak = 0
-                Start-Sleep -Seconds 300
+                Start-Sleep -Seconds ($minutes * 60)
             }
             Start-Process -FilePath $pythonw -ArgumentList "-m", "atri_qq_bot" `
                 -WorkingDirectory $root -WindowStyle Hidden
@@ -108,6 +140,10 @@ public static extern System.IntPtr CreateMutexW(System.IntPtr lpMutexAttributes,
             Write-GuardLog "guard: ATRI was down, started."
             Start-Sleep -Seconds 10
             continue
+        }
+        # ATRI 稳定存活满 10 分钟后清零退避计数，下一次故障周期重新从 5 分钟计。
+        if ($backoutCount -gt 0 -and $ownedByGuard -and (((Get-Date) - $ownedSince).TotalMinutes -ge 10)) {
+            $backoutCount = 0
         }
 
         # NapCat 监护（带 5 分钟重试冷却，登录页等待期间不刷屏）

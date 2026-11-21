@@ -5,7 +5,11 @@
 # 且旧方案只拉 ATRI、不拉 NapCat/QQ——开机后 bot 在 QQ 上仍不在线。
 # 计划任务方案：
 #   - 触发器：当前用户登录后延迟 30 秒（等网络与系统就绪）
-#   - 动作：watchdog.ps1 -Guard（现已全栈监护：ATRI 进程 + NapCat 连接）
+#   - 动作：wscript.exe run_guard.vbs（无窗宿主拉起 watchdog.ps1 -Guard，
+#     全栈监护：ATRI 进程 + NapCat 连接）。不能让任务直接跑 powershell
+#     -File：InteractiveToken 任务会在用户会话挂一个控制台，窗口被关即
+#     CTRL_CLOSE（LastResult 0xC000013A），2026-11-21 实测守卫因此死掉、
+#     系统进入无守卫裸奔；wscript 无控制台可关，停止只能走 -Stop
 #   - ExecutionTimeLimit 用 PT0S（无限期）——默认 72 小时会把常驻守卫杀掉；
 #     New-ScheduledTaskSettingsSet 的 [TimeSpan]::Zero 会序列化成
 #     "00:00:00" 被任务 XML 拒绝，所以走 -Xml 直接注册
@@ -15,9 +19,16 @@
 # BOM 时按 GBK 解析会语法错乱）。
 
 $watchdog = Join-Path $PSScriptRoot "watchdog.ps1"
+$guardVbs = Join-Path $PSScriptRoot "run_guard.vbs"
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $taskName = "ATRI Watchdog"
 $fullUser = "$env:USERDOMAIN\$env:USERNAME"
+
+foreach ($required in @($watchdog, $guardVbs)) {
+    if (-not (Test-Path -LiteralPath $required)) {
+        throw "required file not found: $required"
+    }
+}
 
 if (-not (Test-Path -LiteralPath $watchdog)) {
     throw "watchdog.ps1 not found: $watchdog"
@@ -68,8 +79,8 @@ $taskXml = @"
   </Settings>
   <Actions Context="Author">
     <Exec>
-      <Command>powershell.exe</Command>
-      <Arguments>-NoProfile -ExecutionPolicy Bypass -File "$watchdog" -Guard</Arguments>
+      <Command>wscript.exe</Command>
+      <Arguments>//B //nologo "$guardVbs"</Arguments>
       <WorkingDirectory>$root</WorkingDirectory>
     </Exec>
   </Actions>
@@ -80,4 +91,4 @@ Register-ScheduledTask -TaskName $taskName -Xml $taskXml -User $env:USERNAME -Fo
 
 Write-Output "registered scheduled task: $taskName"
 Write-Output "trigger : $fullUser logon + 30s delay, no execution time limit"
-Write-Output "action  : powershell -File watchdog.ps1 -Guard"
+Write-Output "action  : wscript.exe run_guard.vbs (windowless host) -> watchdog.ps1 -Guard"
