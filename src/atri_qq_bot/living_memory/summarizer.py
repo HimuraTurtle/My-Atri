@@ -268,6 +268,7 @@ class ConversationSummarizer:
             source_start=source_start,
             source_end=source_end,
             source_label=datetime.fromtimestamp(source_end).strftime("%m月%d日"),
+            participants=_collect_participants(messages),
         )
         # 事实密度高且重要的对话，按事实类 TTL 存活更久。
         if importance >= 0.75 and len(atom.key_facts) >= 3:
@@ -316,3 +317,19 @@ class ConversationSummarizer:
                 LOGGER.info(
                     "living memory 强化相似记忆 memory=%d jaccard=%.2f", memory_id, jaccard
                 )
+
+
+def _collect_participants(messages: list[dict[str, Any]]) -> list[str]:
+    """批内发言者（昵称优先）去重，最多 4 个；Bot 不算参与者。"""
+    seen: list[str] = []
+    for message in messages:
+        if str(message.get("role") or "") == "assistant":
+            continue
+        name = str(message.get("sender_name") or "").strip()
+        if not name or name.isdigit() or name == "未知":
+            continue
+        if name not in seen:
+            seen.append(name)
+        if len(seen) >= 4:
+            break
+    return seen

@@ -53,6 +53,8 @@ class MemoryExtractionRequest:
     # 群主会话的发言群友昵称：模型增强路径的 ADD 结果同样要带归属，
     # 否则渲染时会被降级成「某位群友」，个人事实还会混进群画像。
     actor_name: str | None = None
+    # 稳定 QQ 号：与 actor_name 一起落进条目元数据，供渲染端解析改名。
+    actor_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -455,6 +457,8 @@ def _normalise_model_operations(content: Any, request: MemoryExtractionRequest) 
         }
         if request.scope_kind == "group" and request.actor_name:
             normalised["actor_name"] = str(request.actor_name)[:40]
+            if request.actor_id:
+                normalised["actor_id"] = str(request.actor_id)[:24]
         result.append(normalised)
     return result
 

@@ -66,16 +66,22 @@ def _remember_structured_from_user(
     visibility: str = "private",
     source_context: str | None = None,
     actor_name: str | None = None,
+    actor_id: str | None = None,
+    alias_sink: Any = None,
 ) -> None:
     # 结构化记忆采用“先纠正冲突 -> 过滤噪声 -> 抽取 L2 事件/L1 特征 -> 建立关联”
     # 的顺序。L3 是会话滚动窗口，不在这里被误写成永久用户画像。
     # 群主会话的消息来自不同群友，条目必须带 actor_name 归属，否则渲染
     # 注入时“用户生日/用户喜欢”会张冠李戴到当前说话的群友头上。
+    # actor_id 是稳定 QQ 号：条目带上它，渲染端才能在群友改名后把
+    # 旧昵称解析回当前称呼（alias_registry）。
     memory = _ensure_structured_memory(item)
     _apply_user_corrections(memory, text, now)
     style_candidate = _actionable_style_candidate(text, now, visibility, source_context)
     if style_candidate and actor_name:
         style_candidate["actor_name"] = str(actor_name)
+        if actor_id:
+            style_candidate["actor_id"] = str(actor_id)
     style_memory_id = _upsert_l1_candidate(memory, style_candidate, now) if style_candidate else None
     if _is_negative_quality_complaint(text):
         if style_memory_id:
@@ -93,6 +99,8 @@ def _remember_structured_from_user(
     for event in _extract_l2_events(text, now, visibility, source_context):
         if actor_name:
             event["actor_name"] = str(actor_name)
+            if actor_id:
+                event["actor_id"] = str(actor_id)
         _attach_affection_metadata(event, affection_event, current_affection)
         memory_id = _upsert_l2(memory, event, now)
         if memory_id:
@@ -101,6 +109,20 @@ def _remember_structured_from_user(
     for candidate in _extract_l1_candidates(text, now, visibility, source_context):
         if actor_name:
             candidate["actor_name"] = str(actor_name)
+            if actor_id:
+                candidate["actor_id"] = str(actor_id)
+        # 用户亲口教的称呼（「叫我 XX」）同步进人级别别名注册表：
+        # preferred 优先于一切昵称，注入锚点与渲染都用它。
+        if (
+            alias_sink is not None
+            and actor_id
+            and candidate.get("category") == "profile_fact"
+            and candidate.get("key") == "称呼"
+        ):
+            try:
+                alias_sink.set_preferred(actor_id, str(candidate.get("value") or ""))
+            except Exception:
+                pass
         _attach_affection_metadata(candidate, affection_event, current_affection)
         memory_id = _upsert_l1_candidate(memory, candidate, now)
         if memory_id:
@@ -439,6 +461,7 @@ def _upsert_l1_candidate(
             "visibility",
             "source_context",
             "actor_name",
+            "actor_id",
         ):
             if meta_key in pending:
                 promoted[meta_key] = pending[meta_key]
@@ -468,7 +491,7 @@ def _upsert_l2(memory: dict[str, Any], event: dict[str, Any], now: float) -> str
         existing["updated_at"] = now
         existing["last_mentioned_at"] = now
         existing["state"] = "active"
-        for meta_key in ("visibility", "source_context", "actor_name"):
+        for meta_key in ("visibility", "source_context", "actor_name", "actor_id"):
             if meta_key in event:
                 existing[meta_key] = event[meta_key]
         return existing["id"]

@@ -84,6 +84,9 @@ class MemoryAtom:
     source_start: float = 0.0
     source_end: float = 0.0
     source_label: str = ""
+    # 这段记忆涉及哪些人（发言者昵称，去重、最多 4 个）——注入时标注
+    # 参与者，模型才能分清「谁说过这件事」，不把 A 的事安到 B 头上。
+    participants: list[str] = field(default_factory=list)
     memory_id: int = 0
 
     def __post_init__(self) -> None:
@@ -139,5 +142,6 @@ class MemoryAtom:
             source_start=float(row.get("source_start") or 0.0),
             source_end=float(row.get("source_end") or 0.0),
             source_label=str(row.get("source_label") or ""),
+            participants=[str(x) for x in (row.get("participants") or []) if str(x).strip()],
             memory_id=int(row.get("memory_id") or 0),
         )

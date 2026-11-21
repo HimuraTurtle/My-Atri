@@ -17,9 +17,15 @@ class MemoryStateMixin(MemoryMixin):
         self._save_retry_after = 0.0
         self._save_failure_count = 0
         self._memory_state_lock = threading.RLock()
+        # 人级别身份别名：QQ 号 -> 规范名 + 曾用名。群友改名后记忆条目里的
+        # 旧昵称靠它在渲染/注入时解析回当前称呼，避免同一个人裂成两个「人」。
+        from .alias_registry import AliasRegistry, build_display_resolver
+
+        self.aliases = AliasRegistry(path.parent / "identity_aliases.json")
         # 检索器是可选的旁路；即使 SQLite 文件损坏，原 JSON 记忆仍能正常工作。
         self._retrieval = ContextRetrievalPlanner(
-            RetrievalSettings.from_config(path, config)
+            RetrievalSettings.from_config(path, config),
+            alias_resolver=build_display_resolver(self.aliases),
         )
         self._memory_worker = MemoryExtractionWorker(
             self._apply_extraction_result,

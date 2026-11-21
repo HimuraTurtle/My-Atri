@@ -80,6 +80,13 @@ class MemoryObservationMixin(MemoryMixin):
         # 而成员子会话/私聊的条目本来就属于同一个人。
         is_group_main = _is_group_conversation(conversation_id) and ":user:" not in conversation_id
         actor_name = str(nickname).strip() if is_group_main and nickname else None
+        # 人级别别名登记：私聊/群聊只要拿到稳定 QQ 号与昵称就记录，
+        # 群友改名后靠注册表把记忆里的旧昵称解析回当前称呼。
+        if actor_id is not None and nickname:
+            try:
+                self.aliases.record(actor_id, nickname)
+            except Exception:
+                LOGGER.debug("身份别名登记失败 actor=%s", actor_id, exc_info=True)
         _append_session_l3(self._session_l3, conversation_id, text, now, memory, actor_name=actor_name)
         affection_event = _classify_affection_event(text)
         if update_affection:
@@ -92,6 +99,8 @@ class MemoryObservationMixin(MemoryMixin):
             visibility=visibility,
             source_context=source_context,
             actor_name=actor_name,
+            actor_id=(str(actor_id).strip() or None) if is_group_main and actor_id is not None else None,
+            alias_sink=(self.aliases if is_group_main and actor_id is not None else None),
         )
         self._enqueue_memory_extraction(
             conversation_id,
@@ -101,6 +110,7 @@ class MemoryObservationMixin(MemoryMixin):
             source_context=source_context,
             scope_kind="group" if _is_group_conversation(conversation_id) and ":user:" not in conversation_id else "person",
             actor_name=actor_name,
+            actor_id=(str(actor_id).strip() or None) if is_group_main and actor_id is not None else None,
         )
         if not _is_group_conversation(conversation_id):
             _remember_personal_event(item, text, now)
@@ -605,6 +615,8 @@ class MemoryObservationMixin(MemoryMixin):
         conversation_id: str,
         user_text: str,
         now: float | None = None,
+        speaker_name: str | None = None,
+        speaker_id: int | str | None = None,
     ) -> str:
         profile = self.profile(conversation_id, now=now)
         try:
@@ -617,7 +629,40 @@ class MemoryObservationMixin(MemoryMixin):
         living_context = self._living_memory_context(conversation_id, user_text, now)
         if living_context:
             context = f"{context}\n{living_context}" if context else living_context
-        return context
+        anchor = self._speaker_anchor(conversation_id, speaker_name, speaker_id)
+        if anchor and context:
+            return f"{anchor}\n{context}"
+        return anchor or context
+
+    def _speaker_anchor(
+        self,
+        conversation_id: str,
+        speaker_name: str | None,
+        speaker_id: int | str | None,
+    ) -> str:
+        """群主会话的「当前发言人」锚点：记忆按人标注但不绑定说话人，
+        没有这行锚点时，模型容易把检索命中的他人事实安到当前说话人头上。"""
+        if not _is_group_conversation(conversation_id) or ":user:" in conversation_id:
+            return ""
+        name = str(speaker_name or "").strip()
+        key = str(speaker_id or "").strip() if speaker_id is not None else ""
+        display = name
+        former: list[str] = []
+        if key:
+            try:
+                resolved = self.aliases.display(key)
+                if resolved:
+                    display = resolved
+                former = self.aliases.former_names(key)
+            except Exception:
+                former = []
+        if not display:
+            return ""
+        parts = [f"【当前正在和你说话的群友是“{display}”"]
+        if former:
+            parts.append(f"（曾用名/别称：{'、'.join(former[:3])}，是同一个人）")
+        parts.append("。下面记忆里其他群友的事不是 TA 说过的，不要安到 TA 头上。】")
+        return "".join(parts)
 
     def _living_memory_context(
         self,

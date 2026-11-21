@@ -82,7 +82,8 @@ class LivingMemoryStore:
                     created_at REAL NOT NULL,
                     source_start REAL NOT NULL DEFAULT 0,
                     source_end REAL NOT NULL DEFAULT 0,
-                    source_label TEXT NOT NULL DEFAULT ''
+                    source_label TEXT NOT NULL DEFAULT '',
+                    participants_json TEXT NOT NULL DEFAULT '[]'
                 );
                 CREATE INDEX IF NOT EXISTS idx_lm_memories_session
                     ON lm_memories(session_id, status, created_at DESC);
@@ -103,6 +104,14 @@ class LivingMemoryStore:
                 );
                 """
             )
+
+        # 旧库迁移：v1 表没有 participants 列（参与者标注），补上。
+        try:
+            with self._session() as db:
+                db.execute("ALTER TABLE lm_memories ADD COLUMN participants_json TEXT NOT NULL DEFAULT '[]'")
+        except Exception:
+            pass
+
 
     # ---------------- 消息 buffer ----------------
 
@@ -179,8 +188,8 @@ class LivingMemoryStore:
                 (session_id, content, topics_json, key_facts_json, importance, sentiment,
                  atom_type, ttl_days, decay_type, status, reinforcement_count,
                  last_accessed_at, last_reinforced_at, expires_at, created_at,
-                 source_start, source_end, source_label)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                 source_start, source_end, source_label, participants_json)
+                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     atom.session_id, atom.content,
                     json.dumps(atom.topics, ensure_ascii=False),
@@ -190,6 +199,7 @@ class LivingMemoryStore:
                     atom.reinforcement_count, atom.last_accessed_at,
                     atom.last_reinforced_at, atom.expires_at, atom.created_at,
                     atom.source_start, atom.source_end, atom.source_label,
+                    json.dumps(list(atom.participants or []), ensure_ascii=False),
                 ),
             )
             memory_id = int(cursor.lastrowid or 0)
@@ -252,7 +262,7 @@ class LivingMemoryStore:
         with self._session() as db:
             rows = db.execute(
                 """SELECT e.memory_id, e.session_id, e.content, e.importance, e.status,
-                          e.created_at, e.last_accessed_at
+                          e.created_at, e.last_accessed_at, e.participants_json
                 FROM lm_memories_fts
                 JOIN lm_memories AS e ON e.memory_id = lm_memories_fts.memory_id
                 WHERE lm_memories_fts MATCH ? AND lm_memories_fts.session_id = ?
@@ -350,7 +360,7 @@ class LivingMemoryStore:
 
 
 def _decode_row(row: dict[str, Any]) -> dict[str, Any]:
-    for json_key in ("topics_json", "key_facts_json"):
+    for json_key in ("topics_json", "key_facts_json", "participants_json"):
         if json_key in row:
             plain_key = json_key[:-5]
             try:

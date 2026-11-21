@@ -6,7 +6,7 @@ import re
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from atri_qq_bot.runtime.paths import PROMPT_DIR, PROJECT_ROOT
 from atri_qq_bot.runtime.inference_lock import inference_resource_lease_sync
@@ -59,9 +59,15 @@ class ContextRetrievalPlanner:
     上游不需要知道 SQLite、FTS5 或未来的嵌入模型实现。
     """
 
-    def __init__(self, settings: RetrievalSettings) -> None:
+    def __init__(
+        self,
+        settings: RetrievalSettings,
+        alias_resolver: Callable[[Any, str], str] | None = None,
+    ) -> None:
         self.settings = settings
         self.repository = SemanticMemoryRepository(settings.database_path)
+        # 人级别别名解析（QQ 号 -> 当前称呼）；缺省保持记忆内旧昵称原样。
+        self._alias_resolver = alias_resolver
         self._lore_indexed = False
 
     def build(self, profile: dict[str, Any], user_text: str) -> str:
@@ -191,7 +197,11 @@ class ContextRetrievalPlanner:
         used = 0
         memory_lines: list[str] = []
         for entry in memories:
-            line = _memory_line(entry, group_main=is_group_main)
+            line = _memory_line(
+                entry,
+                group_main=is_group_main,
+                alias_resolver=self._alias_resolver,
+            )
             if line and len(line) + used <= self.settings.max_context_chars * 0.56:
                 memory_lines.append(line)
                 used += len(line)
@@ -265,7 +275,11 @@ def _looks_like_lore_question(text: str) -> bool:
     return any(needle in value for needle in needles)
 
 
-def _memory_line(entry: RetrievedEntry, group_main: bool = False) -> str:
+def _memory_line(
+    entry: RetrievedEntry,
+    group_main: bool = False,
+    alias_resolver: Callable[[Any, str], str] | None = None,
+) -> str:
     if not entry.content:
         return ""
     if not group_main:
@@ -273,6 +287,14 @@ def _memory_line(entry: RetrievedEntry, group_main: bool = False) -> str:
             return f"可能：{entry.title}—{entry.content}"
         return f"{entry.title}—{entry.content}"
     actor = str((entry.metadata or {}).get("actor_name") or "").strip()
+    actor_id = (entry.metadata or {}).get("actor_id")
+    # 群友改名后，记忆条目里的旧昵称按 QQ 号解析回当前称呼；
+    # 解析不到（旧数据/无 actor_id）时保持旧昵称原样。
+    if actor_id is not None and alias_resolver is not None:
+        try:
+            actor = alias_resolver(actor_id, actor)
+        except Exception:
+            pass
     subject = f"群友“{actor}”" if actor else "某位群友"
     if entry.layer == "candidates":
         return f"{subject}可能：{entry.title}—{entry.content}"

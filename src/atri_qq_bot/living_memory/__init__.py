@@ -210,16 +210,26 @@ def _source_label(row: dict[str, Any]) -> str:
     start = float(row.get("source_start") or 0.0)
     end = float(row.get("source_end") or 0.0)
     label = str(row.get("source_label") or "").strip()
+    participants = [
+        str(name).strip()
+        for name in (row.get("participants") or [])
+        if str(name).strip()
+    ]
+    # 参与者标注：让模型分清这段记忆「涉及谁」，不把 A 的事安到 B 头上。
+    who = f"与{'、'.join(participants[:3])}有关" if participants else ""
+    time_part = ""
     if label:
-        return f"（{label}）"
-    if start > 0:
+        time_part = label
+    elif start > 0:
         try:
             if end > 0 and abs(end - start) > 45 * 60:
-                return (
-                    f"（{datetime.fromtimestamp(start):%m月%d日}到"
-                    f"{datetime.fromtimestamp(end):%m月%d日}）"
+                time_part = (
+                    f"{datetime.fromtimestamp(start):%m月%d日}到"
+                    f"{datetime.fromtimestamp(end):%m月%d日}"
                 )
-            return f"（{datetime.fromtimestamp(start):%m月%d日}）"
+            else:
+                time_part = f"{datetime.fromtimestamp(start):%m月%d日}"
         except (ValueError, OSError):
-            pass
-    return ""
+            time_part = ""
+    inner = "，".join(part for part in (who, time_part) if part)
+    return f"（{inner}）" if inner else ""

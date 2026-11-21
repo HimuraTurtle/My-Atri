@@ -240,6 +240,8 @@ class EngineToolsMixin(PersonaEngineMixin):
                 self.memory.recall_context,
                 profile_id or conversation_id,
                 user_text,
+                speaker_name=nickname,
+                speaker_id=_user_id_from_profile_id(profile_id),
             )
         if context_profile and not visual_turn:
             topics = (
@@ -262,6 +264,8 @@ class EngineToolsMixin(PersonaEngineMixin):
                     self.memory.recall_context,
                     conversation_id,
                     user_text,
+                    speaker_name=nickname,
+                    speaker_id=_user_id_from_profile_id(profile_id),
                 )
                 if group_memory_context:
                     messages.append(
