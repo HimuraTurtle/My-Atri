@@ -38,3 +38,7 @@ data/voice/references/
 data/voice/singing-pipeline.json
 src/data/
 tools/onebot-qzone/
+out/
+
+# 对话评估复跑产物
+tools/eval/out/
