@@ -734,12 +734,17 @@ def memory_layers(item: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         if isinstance(entry, dict)
         and _displayable_trait_entry(entry)
     ]
+    # 按最近更新排序：L1 的存储顺序是最早入库在前，若按原序展示，
+    # 摘要与面板永远被几个月前的旧条目占满，新画像更新完全不露面，
+    # 看起来就是“人物档案很久没更新”。新鲜度取 updated_at/last_mentioned_at/created_at 的最大值。
+    l1.sort(key=_trait_freshness, reverse=True)
     l2 = [
         entry
         for entry in structured.get("l2", [])
         if isinstance(entry, dict)
         and entry.get("category") in {"event", "schedule", "important_interaction"}
     ]
+    l2.sort(key=_trait_freshness, reverse=True)
     l3 = [entry for entry in structured.get("l3", []) if isinstance(entry, dict)]
     if not l3:
         # 兼容旧记忆文件：旧版本没有持久化 L3，暂时把最近 8 条历史映射为
@@ -767,7 +772,47 @@ def memory_layers(item: dict[str, Any]) -> dict[str, list[dict[str, Any]]]:
         for entry in structured.get("candidates", [])
         if isinstance(entry, dict) and _displayable_trait_entry(entry)
     ]
+    candidates.sort(key=_trait_freshness, reverse=True)
     return {"l1": l1, "l2": l2, "l3": l3[-8:], "candidates": candidates}
+
+
+def _trait_freshness(entry: dict[str, Any]) -> float:
+    """条目新鲜度：updated_at > last_mentioned_at > created_at，取可用最大值。"""
+
+    def as_float(value: Any) -> float:
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return 0.0
+
+    return max(
+        as_float(entry.get("updated_at")),
+        as_float(entry.get("last_mentioned_at")),
+        as_float(entry.get("created_at")),
+        as_float(entry.get("at")),
+    )
+
+
+# 提取器偶发把句子残片当画像值入库（“偏好：这句”“资料：感觉”）。
+# 这些纯功能词/口头禅作为“用户特点”没有任何信息量，展示层直接过滤；
+# 不动线上记忆数据本体，历史垃圾条目留在库里不影响展示。
+_FRAGMENT_TRAIT_VALUES = frozenset(
+    {
+        "感觉",
+        "这句",
+        "主要是",
+        "的类型",
+        "什么",
+        "喜欢",
+        "可以",
+        "真的",
+        "好像",
+        "应该",
+        "就是",
+        "这个",
+        "那个",
+    }
+)
 
 
 def _displayable_trait_entry(entry: dict[str, Any]) -> bool:
@@ -779,6 +824,8 @@ def _displayable_trait_entry(entry: dict[str, Any]) -> bool:
     if category not in {"profile_fact", "interest", "preference", "habit", "communication_style"}:
         return False
     if not useful_plain_text(value) or len(value) > 64:
+        return False
+    if len(value) < 2 or value in _FRAGMENT_TRAIT_VALUES:
         return False
     if any(marker in value for marker in ("你", "亚托莉", "http://", "https://", "...", "…")):
         return False

@@ -189,6 +189,98 @@ def test_memory_detail_exposes_only_three_memory_layers(tmp_path: Path) -> None:
     assert "这句原始历史不应混入概览" not in detail["natural"]
 
 
+def test_memory_layers_surfaces_freshest_traits(tmp_path: Path) -> None:
+    memory_path = tmp_path / "users.json"
+    memory_path.write_text(
+        json.dumps(
+            {
+                "version": 2,
+                "conversations": {
+                    "private:10001": {
+                        "target": {"user_id": 10001},
+                        "structured_memory": {
+                            # 存储顺序：最老在前。旧条目 updated_at 停在 9 月，
+                            # 新条目 11 月刚更新——摘要必须让新条目先露面，
+                            # 否则档案看起来永远停在旧画像。
+                            "l1": [
+                                {
+                                    "category": "interest",
+                                    "key": "兴趣:旧爱好",
+                                    "value": "旧爱好钓鱼",
+                                    "created_at": 1788331778.0,
+                                    "updated_at": 1788331778.0,
+                                },
+                                {
+                                    "category": "interest",
+                                    "key": "兴趣:新爱好",
+                                    "value": "新爱好养鸟",
+                                    "created_at": 1788331778.0,
+                                    "updated_at": 1795518726.0,
+                                },
+                                # 提取残片：句子碎片被当成画像值，展示层应过滤
+                                {
+                                    "category": "preference",
+                                    "key": "偏好:这句",
+                                    "value": "这句",
+                                    "created_at": 1789535580.0,
+                                },
+                                {
+                                    "category": "profile_fact",
+                                    "key": "身份/专业",
+                                    "value": "感觉",
+                                    "created_at": 1788331778.0,
+                                },
+                            ],
+                            "l2": [
+                                {
+                                    "category": "event",
+                                    "key": "旧事件",
+                                    "value": "九月的旧事件",
+                                    "created_at": 1788331778.0,
+                                },
+                                {
+                                    "category": "event",
+                                    "key": "新事件",
+                                    "value": "十一月的新事件",
+                                    "created_at": 1795518726.0,
+                                },
+                            ],
+                            "candidates": [
+                                {
+                                    "category": "preference",
+                                    "key": "偏好:待确认",
+                                    "value": "辣的不要",
+                                    "created_at": 1795518726.0,
+                                },
+                                {
+                                    "category": "preference",
+                                    "key": "偏好:旧的待确认",
+                                    "value": "旧的待确认项",
+                                    "created_at": 1788331778.0,
+                                },
+                            ],
+                        },
+                    }
+                },
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+
+    detail = MemoryAdmin(memory_path, tmp_path / "backups").detail("id=private%3A10001")
+
+    assert [entry["value"] for entry in detail["layers"]["l1"]] == ["新爱好养鸟", "旧爱好钓鱼"]
+    assert [entry["value"] for entry in detail["layers"]["l2"]] == ["十一月的新事件", "九月的旧事件"]
+    assert [entry["value"] for entry in detail["layers"]["candidates"]] == [
+        "辣的不要",
+        "旧的待确认项",
+    ]
+    assert "新爱好养鸟" in detail["natural"]
+    # 摘要里新画像必须排在旧画像之前——这是“档案没更新”观感的直接修复点。
+    assert detail["natural"].find("新爱好养鸟") < detail["natural"].find("旧爱好钓鱼")
+
+
 def test_memory_tabs_use_layer_names() -> None:
     html = render_index()
 
